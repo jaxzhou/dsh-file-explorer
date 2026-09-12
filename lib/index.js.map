@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../src/index.ts"],
+  "sourcesContent": ["/**\n * Host half of the `dsh-file-explorer` plugin.\n *\n * The plugin is browser-only. Its file tree and preview read through the\n * `workspaceFiles` Remote namespace that the Web composition already mounts\n * (`@deepseek-ai/dsh-api-workspace-files`), so the Host side publishes no\n * service, tool, prompt section, or event \u2014 it exists to give the package a\n * Loader row and to publish the `dsh.client` declaration in `package.json`\n * that makes the client module system serve `lib/client.js`.\n */\n\n/** This plugin's identity inside the Host Loader. */\nexport const name = 'file-explorer'\n\n/** No Host-side behavior. */\nexport function apply(): void {}\n"],
+  "mappings": ";AAYO,IAAM,OAAO;AAGb,SAAS,QAAc;AAAC;",
+  "names": []
+}

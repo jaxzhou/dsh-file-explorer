@@ -1,0 +1,4 @@
+# Build output is committed on purpose: a git or tarball install loads
+# lib/index.js and lib/client.js directly and runs no build script.
+node_modules/
+*.tsbuildinfo

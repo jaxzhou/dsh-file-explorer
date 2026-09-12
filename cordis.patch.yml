@@ -1,0 +1,11 @@
+# Bundle layer of dsh-file-explorer.
+#
+# Applied after every earlier bundle layer when a profile lists this package in
+# `dsh.profile.bundles`. The single row mounts the plugin's Host half (an inert
+# module) and publishes the package's `dsh.client` declaration to the client
+# module system, which serves `lib/client.js` to the browser. The browser half
+# registers the "Files" Conversation View tab; unloading this row removes the
+# tab again.
+- insert:
+    - id: dsh-file-explorer
+      name: dsh-file-explorer
