@@ -254,6 +254,119 @@ const CSS = `
   overflow-wrap: break-word;
 }
 
+/* The preview pane's header row carries the open tabs and, at its end, the
+   active tab's controls. The tabs take the room that is left and scroll; the
+   controls never shrink away. */
+.dsh-fe-tabhead {
+  gap: 8px;
+  padding: 0 6px 0 8px;
+}
+
+.dsh-fe-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 2px;
+  align-items: stretch;
+  min-width: 0;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.dsh-fe-tabs::-webkit-scrollbar {
+  height: 0;
+}
+
+.dsh-fe-tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-width: 0;
+  max-width: 220px;
+  border-radius: 8px;
+}
+
+.dsh-fe-tab:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.dsh-fe-tab[data-active] {
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+.dsh-fe-tab-label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 5px 4px 5px 8px;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.dsh-fe-tab[data-active] .dsh-fe-tab-label {
+  color: var(--dsw-alias-label-primary);
+}
+
+.dsh-fe-tab-name {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The close control appears for the tab under the pointer and for the active
+   tab, so a full strip stays readable. */
+.dsh-fe-tab-close {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 5px;
+  padding: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.dsh-fe-tab:hover .dsh-fe-tab-close,
+.dsh-fe-tab[data-active] .dsh-fe-tab-close,
+.dsh-fe-tab-close:focus-visible {
+  opacity: 1;
+}
+
+.dsh-fe-tab-close:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* A file already open in a tab keeps a quiet marker in the tree, so the reader
+   can see where the strip came from without it competing with the active row. */
+.dsh-fe-open-dot {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  margin-left: auto;
+  background: var(--dsw-alias-brand-primary);
+  border-radius: 50%;
+  opacity: 0.6;
+}
+
 /* Rendered Markdown: prose lays out in normal white space, with the pane's
    insets and no monospace inheritance from the source view. */
 .dsh-fe-prose {

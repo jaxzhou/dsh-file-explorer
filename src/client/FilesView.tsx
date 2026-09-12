@@ -1,28 +1,30 @@
 /**
- * The Files Conversation View: the session workspace on the left, one file's
- * contents on the right.
+ * The Files Conversation View: the session workspace on the left, one preview
+ * tab per opened file on the right.
  *
  * The view is one `conversation.view` entry, so it sits beside Chat and
  * Trajectory in the same tab strip and the shell renders it one at a time.
  * Everything the tree keeps lives in its store; everything it asks for goes
  * through its injected face. The component only decides what to draw for each
- * absolute path and what a click means: a directory toggles, a file selects for
- * preview, and anything else is shown but refuses to open.
+ * absolute path and what a click means: a directory toggles, a file opens a
+ * preview tab (or focuses the one already open for it), and anything else is
+ * shown but refuses to open.
  *
- * The preview body follows the file's format (see `format.ts`): Markdown renders
- * as a document with a source view behind a toggle, JSON as a collapsible tree
- * with the same toggle, a recognized source suffix through the shared
+ * A tab's body follows the file's format (see `format.ts`): Markdown renders as a
+ * document with a source view behind a toggle, JSON as a collapsible tree with
+ * the same toggle, a recognized source suffix through the shared
  * syntax-highlighted code block, an image as the image, and everything else as
- * plain numbered text. All of it comes from `@deepseek-ai/dsh-client-ui-primitives`,
- * which the browser shell shares into its frozen module table — the one way this
- * bundle may use another package's values at runtime.
+ * plain numbered text. All of it comes from
+ * `@deepseek-ai/dsh-client-ui-primitives`, which the browser shell shares into its
+ * frozen module table — the one way this bundle may use another package's values
+ * at runtime.
  *
  * Switching to another tab unmounts this component but not its Session-scoped
- * store, so expansion, the selected file, and the chosen body survive the round
- * trip. A read left mid-flight when that happens settles into the store anyway,
- * because the face's requests ride the plugin's lifetime, not the component's.
+ * store, so the tree, the open tabs, and the active tab survive the round trip. A
+ * read left in flight when that happens settles into the store anyway, because
+ * the face's requests ride the plugin's lifetime, not the component's.
  */
-import { useEffect, useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InjectFace, PropsLocale, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
@@ -88,6 +90,35 @@ export function pathParts(path: string): { directory: string; name: string } {
   const at = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   if (at < 0) return { directory: '', name: path }
   return { directory: path.slice(0, at + 1), name: path.slice(at + 1) }
+}
+
+/**
+ * The display label of every open tab.
+ *
+ * A tab shows its basename, which is what a strip can afford. Two open files
+ * that share a basename are ambiguous on their own — `index.ts` in three
+ * directories is the ordinary case — so those tabs carry their parent directory
+ * as a prefix, and only those. The full path stays in each tab's tooltip.
+ * @param open - open tab paths, in strip order.
+ * @returns a label per path.
+ */
+export function tabLabels(open: readonly string[]): Record<string, string> {
+  const twins = new Map<string, number>()
+  for (const path of open) {
+    const { name } = pathParts(path)
+    twins.set(name, (twins.get(name) ?? 0) + 1)
+  }
+  const labels: Record<string, string> = {}
+  for (const path of open) {
+    const { directory, name } = pathParts(path)
+    if ((twins.get(name) ?? 0) < 2) {
+      labels[path] = name
+      continue
+    }
+    const parent = pathParts(directory.replace(/[/\\]+$/, '')).name
+    labels[path] = parent === '' ? name : `${parent}/${name}`
+  }
+  return labels
 }
 
 /**
@@ -159,9 +190,10 @@ export function previewFailureLine(
   }
 }
 
-/** What every level shares: the explorer's state and the three gestures. */
+/** What every level shares: the explorer's state and the two gestures. */
 interface TreeContext {
   readonly state: FilesState
+  readonly open: ReadonlySet<string>
   readonly onToggle: (path: string) => void
   readonly onOpen: (path: string) => void
   readonly t: TranslateNS<'fileExplorer'>
@@ -228,16 +260,23 @@ function Entry({
     )
   }
   if (entry.type === 'file') {
+    const isOpen = tree.open.has(path)
     return (
-      <li className="dsh-fe-item" data-files-entry="file" data-files-path={path}>
+      <li
+        className="dsh-fe-item"
+        data-files-entry="file"
+        data-files-path={path}
+        data-files-open={isOpen || undefined}
+      >
         <button
           type="button"
           className="dsh-fe-row"
-          aria-current={tree.state.selected === path}
+          aria-current={tree.state.active === path}
           onClick={() => { tree.onOpen(path) }}
         >
           <FileTypeIcon kind={classifyFileType(entry.name)} size={16} />
           <span className="dsh-fe-name">{entry.name}</span>
+          {isOpen && <span className="dsh-fe-open-dot" aria-hidden="true" />}
         </button>
       </li>
     )
@@ -359,33 +398,59 @@ function FormattedBody({
   )
 }
 
+/** Which body a tab is drawing, which is also which controls apply. */
+type PreviewBodyKind = 'rendered' | 'source' | 'image'
+
 /**
- * The preview pane's body for the current selection.
- *
- * Every body owns its own scrollport class (`dsh-fe-scroll`) so the pane header
- * stays put; the body kind decides which of them, and the header's controls
- * follow the same decision.
+ * Resolve the body a file's format and the tab's mode choice agree on.
+ * @param content - what the read delivered, or null while it has not settled.
+ * @param format - the file's format.
+ * @param mode - the tab's explicit choice, or undefined to follow the default.
+ * @param jsonWalkable - whether a `json` format's document parsed into a tree.
+ * @returns the body kind.
+ */
+function bodyKindOf(
+  content: PreviewContent | null,
+  format: PreviewFormat,
+  mode: PreviewMode | undefined,
+  jsonWalkable: boolean,
+): PreviewBodyKind {
+  if (content !== null && content.kind === 'image') return 'image'
+  if (!hasSourceToggle(format)) return 'source'
+  if ((mode ?? 'rendered') === 'source') return 'source'
+  // JSON the tree cannot walk falls back to its source, so the controls offer the
+  // body that is actually on screen.
+  if (format.kind === 'json' && !jsonWalkable) return 'source'
+  return 'rendered'
+}
+
+/**
+ * The body of one settled preview tab.
+ * @param props - the tab's content, its format, the elected body, and copy.
+ * @returns the scrollport holding that body.
  */
 function PreviewBody({
-  state,
+  path,
   content,
   format,
   body,
   jsonDocument,
   jsonFallback,
+  wrap,
   t,
 }: {
-  state: FilesState
+  path: string
   content: PreviewContent
   format: PreviewFormat
   body: PreviewBodyKind
   jsonDocument: object | undefined
   /** The reader asked for the tree and the file does not parse; say so above the source. */
   jsonFallback: boolean
+  wrap: boolean
   t: TranslateNS<'fileExplorer'>
 }): ReactNode {
   if (content.kind === 'image') {
-    const { name } = pathParts(state.selected ?? '')
+    const { name } = pathParts(path)
     return (
       <div className="dsh-fe-scroll dsh-fe-imagehost" data-preview-state="ready" data-preview-format="image">
         <img className="dsh-fe-image" src={content.image.dataUrl} alt={name} data-preview-image />
@@ -421,7 +486,7 @@ function PreviewBody({
       )}
       {body === 'rendered'
         ? <FormattedBody page={page} format={format} jsonDocument={jsonDocument} t={t} />
-        : <HighlightedSource page={page} lang={format.lang} wrap={state.wrap} t={t} />}
+        : <HighlightedSource page={page} lang={format.lang} wrap={wrap} t={t} />}
       {!page.eof && (
         <p className="dsh-fe-note" data-preview-row="truncated">
           {t('preview.truncated', { lines: page.lines })}
@@ -431,34 +496,8 @@ function PreviewBody({
   )
 }
 
-/** Which body the pane is drawing, which is also which header controls apply. */
-type PreviewBodyKind = 'rendered' | 'source' | 'image'
-
 /**
- * Resolve the body a file's format and the reader's mode choice agree on.
- * @param content - what the read delivered, or null while it has not settled.
- * @param format - the file's format.
- * @param mode - the reader's explicit choice, or null to follow the default.
- * @param jsonWalkable - whether a `json` format's document parsed into a tree.
- * @returns the body kind.
- */
-function bodyKindOf(
-  content: PreviewContent | null,
-  format: PreviewFormat,
-  mode: PreviewMode | null,
-  jsonWalkable: boolean,
-): PreviewBodyKind {
-  if (content !== null && content.kind === 'image') return 'image'
-  if (!hasSourceToggle(format)) return 'source'
-  if ((mode ?? 'rendered') === 'source') return 'source'
-  // JSON the tree cannot walk falls back to its source, so the header offers the
-  // body that is actually on screen.
-  if (format.kind === 'json' && !jsonWalkable) return 'source'
-  return 'rendered'
-}
-
-/**
- * The Files view: the workspace tree, and the preview of the selected file.
+ * The Files view: the workspace tree, the open preview tabs, and the active tab.
  * @param props - the Conversation View seat, store, injected face, and copy.
  * @returns the two-pane explorer.
  */
@@ -467,24 +506,45 @@ export function FilesView({
 }: FilesViewProps): ReactNode {
   const cwd = useSessions(sessions => sessions.byId[sessionId]?.cwd)
   const state = useStore(store => store)
-  // A JSON document is parsed here, once per settled read, because both the
-  // header's body election and the tree body need the answer. Parsing stays a
-  // function of the pane's own decision, not of the read: a file the tree cannot
-  // walk is still previewed, as source.
-  const jsonDocument = useMemo(() => {
-    if (state.selected === null) return undefined
-    if ((state.mode ?? 'rendered') === 'source') return undefined
-    if (previewFormatFor(state.selected).kind !== 'json') return undefined
-    const preview = state.preview
-    if (preview.kind !== 'ready' || preview.content.kind !== 'text') return undefined
-    return parseJsonDocument(preview.content.page.text)
-  }, [state.mode, state.preview, state.selected])
+  const activeTabRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
     if (cwd === undefined || state.root === cwd) return
     actions.start(cwd)
     list(cwd)
   }, [actions, cwd, list, state.root])
+
+  const active = state.active
+  const format: PreviewFormat | null = active === null ? null : previewFormatFor(active)
+  const content = active !== null && state.previews[active]?.kind === 'ready'
+    ? (state.previews[active] as { content: PreviewContent }).content
+    : null
+
+  // A JSON document is parsed here, once per settled read, because both the
+  // controls' body election and the tree body need the answer. Parsing stays a
+  // function of the pane's own decision, not of the read: a file the tree cannot
+  // walk is still previewed, as source.
+  const jsonDocument = useMemo(() => {
+    if (active === null || content === null || content.kind !== 'text') return undefined
+    if ((state.modes[active] ?? 'rendered') === 'source') return undefined
+    if (previewFormatFor(active).kind !== 'json') return undefined
+    return parseJsonDocument(content.page.text)
+  }, [active, content, state.modes])
+
+  /**
+   * Content follows the active tab, not the click that opened it: a tab whose
+   * content was dropped for retention reads again the moment it is shown, and a
+   * tab that is already loaded costs nothing.
+   */
+  useEffect(() => {
+    if (active === null) return
+    if (state.previews[active] !== undefined) return
+    read(active)
+  }, [active, read, state.previews])
+
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [active])
 
   if (cwd === undefined) {
     return (
@@ -495,14 +555,16 @@ export function FilesView({
   }
   if (state.root === null) return null
 
+  const openSet = new Set(state.open)
   const tree: TreeContext = {
     state,
+    open: openSet,
     onToggle: (path) => {
       const loaded = state.levels[path] !== undefined
       actions.toggled(path)
       if (!loaded) list(path)
     },
-    onOpen: (path) => { read(path) },
+    onOpen: (path) => { actions.openFile(path) },
     t,
   }
   // Reload drops every level and asks again for the expanded ones; a collapsed
@@ -512,39 +574,31 @@ export function FilesView({
     for (const path of state.expanded) list(path)
   }
   const reloadPreview = (): void => {
-    if (state.selected !== null) read(state.selected)
+    if (active !== null) read(active)
+  }
+  const closeTab = (path: string): void => {
+    actions.closeFile(path)
   }
   const root = pathParts(state.root)
-  const selected = state.selected === null ? null : pathParts(state.selected)
-  const preview: PreviewState = state.preview
-  const format: PreviewFormat | null = state.selected === null
-    ? null
-    : previewFormatFor(state.selected)
-  const content = preview.kind === 'ready' ? preview.content : null
-  const fallbackFormat: PreviewFormat = { kind: 'text', lang: undefined, mediaType: undefined }
-  const body = bodyKindOf(
-    content,
-    format ?? fallbackFormat,
-    state.mode,
-    jsonDocument !== undefined,
-  )
+  const labels = tabLabels(state.open)
+  const wrap = active === null ? true : state.wraps[active] ?? true
+  const preview: PreviewState | undefined = active === null ? undefined : state.previews[active]
+  const body = bodyKindOf(content, format ?? { kind: 'text', lang: undefined, mediaType: undefined }, active === null ? undefined : state.modes[active], jsonDocument !== undefined)
   const jsonFallback = format?.kind === 'json'
-    && (state.mode ?? 'rendered') === 'rendered'
+    && (active === null ? 'rendered' : state.modes[active] ?? 'rendered') === 'rendered'
     && jsonDocument === undefined
     && content !== null
     && content.kind === 'text'
-  const meta = preview.kind !== 'ready'
+  const meta = content === null
     ? null
-    : preview.content.kind === 'text'
+    : content.kind === 'text'
       ? [
-        t('preview.lines', { lines: preview.content.page.lines }),
-        preview.content.page.bytes === undefined
-          ? null
-          : fileSizeText(preview.content.page.bytes),
+        t('preview.lines', { lines: content.page.lines }),
+        content.page.bytes === undefined ? null : fileSizeText(content.page.bytes),
       ].filter(part => part !== null).join(' · ')
-      : preview.content.image.bytes === undefined
+      : content.image.bytes === undefined
         ? null
-        : fileSizeText(preview.content.image.bytes)
+        : fileSizeText(content.image.bytes)
 
   return (
     <div
@@ -578,19 +632,51 @@ export function FilesView({
           </div>
         </div>
         <div className="dsh-fe-preview" data-files-pane="preview">
-          <div className="dsh-fe-head">
-            {selected === null
+          <div className="dsh-fe-head dsh-fe-tabhead">
+            {state.open.length === 0
               ? <span className="dsh-fe-path dsh-fe-path-muted">{t('preview.title')}</span>
               : (
-                <span className="dsh-fe-path" title={state.selected ?? undefined}>
-                  <span>
-                    <span className="dsh-fe-path-muted">{selected.directory}</span>
-                    {selected.name}
-                  </span>
-                </span>
+                <div className="dsh-fe-tabs" role="tablist" aria-label={t('preview.tabs')} data-preview-tabs>
+                  {state.open.map(path => {
+                    const isActive = path === active
+                    return (
+                      <span className="dsh-fe-tab" key={path} role="presentation" data-preview-tab={path} data-active={isActive || undefined}>
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={isActive}
+                          className="dsh-fe-tab-label"
+                          title={path}
+                          ref={isActive ? activeTabRef : undefined}
+                          data-preview-tab-open={path}
+                          onClick={() => { actions.activate(path) }}
+                          onAuxClick={(event) => {
+                            // Middle click closes, as it does in every editor.
+                            if (event.button === 1) closeTab(path)
+                          }}
+                        >
+                          <FileTypeIcon kind={classifyFileType(path)} size={14} />
+                          <span className="dsh-fe-tab-name">{labels[path]}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="dsh-fe-tab-close"
+                          aria-label={t('preview.close', { name: labels[path] })}
+                          title={t('preview.close', { name: labels[path] })}
+                          data-preview-tab-close={path}
+                          onClick={() => { closeTab(path) }}
+                        >
+                          <span aria-hidden="true">×</span>
+                        </button>
+                      </span>
+                    )
+                  })}
+                </div>
               )}
-            {meta !== null && <span className="dsh-fe-meta" data-preview-meta>{meta}</span>}
-            {format !== null && hasSourceToggle(format) && (
+            {content !== null && meta !== null && (
+              <span className="dsh-fe-meta" data-preview-meta>{meta}</span>
+            )}
+            {active !== null && format !== null && hasSourceToggle(format) && (
               <button
                 type="button"
                 className="dsh-fe-tool"
@@ -598,25 +684,25 @@ export function FilesView({
                 aria-label={body === 'source' ? t('preview.rendered') : t('preview.source')}
                 title={body === 'source' ? t('preview.rendered') : t('preview.source')}
                 data-preview-mode-toggle
-                onClick={() => { actions.setMode(body === 'source' ? 'rendered' : 'source') }}
+                onClick={() => { actions.setMode(active, body === 'source' ? 'rendered' : 'source') }}
               >
                 {body === 'source' ? t('preview.rendered') : t('preview.source')}
               </button>
             )}
-            {body === 'source' && (
+            {active !== null && body === 'source' && (
               <button
                 type="button"
                 className="dsh-fe-tool"
-                aria-pressed={state.wrap}
-                aria-label={state.wrap ? t('preview.nowrap') : t('preview.wrap')}
-                title={state.wrap ? t('preview.nowrap') : t('preview.wrap')}
+                aria-pressed={wrap}
+                aria-label={wrap ? t('preview.nowrap') : t('preview.wrap')}
+                title={wrap ? t('preview.nowrap') : t('preview.wrap')}
                 data-preview-wrap-toggle
-                onClick={() => { actions.setWrap(!state.wrap) }}
+                onClick={() => { actions.setWrap(active, !wrap) }}
               >
-                {state.wrap ? '↵' : '→'}
+                {wrap ? '↵' : '→'}
               </button>
             )}
-            {state.selected !== null && (
+            {active !== null && (
               <button
                 type="button"
                 className="dsh-fe-tool"
@@ -629,8 +715,11 @@ export function FilesView({
               </button>
             )}
           </div>
-          {preview.kind === 'loading' && <div className="dsh-fe-status">{t('preview.loading')}</div>}
-          {preview.kind === 'failed' && (
+          {active === null && <div className="dsh-fe-status">{t('preview.placeholder')}</div>}
+          {active !== null && (preview === undefined || preview.kind === 'loading') && (
+            <div className="dsh-fe-status">{t('preview.loading')}</div>
+          )}
+          {active !== null && preview?.kind === 'failed' && (
             <div className="dsh-fe-scroll" data-preview-state="failed">
               <p className="dsh-fe-note dsh-fe-note-error" data-preview-code={preview.failure.code}>
                 {previewFailureLine(t, preview.failure)}
@@ -640,17 +729,15 @@ export function FilesView({
               </button>
             </div>
           )}
-          {state.selected === null && (
-            <div className="dsh-fe-status">{t('preview.placeholder')}</div>
-          )}
-          {preview.kind === 'ready' && content !== null && format !== null && (
+          {active !== null && content !== null && format !== null && (
             <PreviewBody
-              state={state}
+              path={active}
               content={content}
               format={format}
               body={body}
               jsonDocument={jsonDocument}
               jsonFallback={jsonFallback}
+              wrap={wrap}
               t={t}
             />
           )}

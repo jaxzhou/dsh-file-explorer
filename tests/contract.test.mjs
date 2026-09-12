@@ -7,6 +7,10 @@
  * registers — the view id and order, the exclusive store, the injected face's
  * Remote calls, and the stylesheet — so a regression in the wiring fails here
  * instead of only in a browser.
+ *
+ * The store's actions are exercised through the registered handle: the stub
+ * `defineStore` returns the declaration, so `store.init()` plus the plain action
+ * functions are the same write set the framework binds for the component.
  */
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
@@ -41,6 +45,7 @@ function stubRequire() {
   const react = {
     useEffect: () => {},
     useMemo: (compute) => compute(),
+    useRef: (value) => ({ current: value }),
     useState: (value) => [typeof value === 'function' ? value() : value, () => {}],
   }
   const noop = () => null
@@ -97,6 +102,18 @@ function fakeContext({ list, read, readAll }) {
   return { ctx, registrations, effects, dictionaries, styles }
 }
 
+/** The synchronous settlement of a stubbed Remote call. */
+const settled = () => new Promise(resolve => setImmediate(resolve))
+
+/** A recording stand-in for the bound store actions the face writes through. */
+function recordingActions() {
+  const writes = []
+  const actions = new Proxy({}, {
+    get: (_target, name) => (...args) => { writes.push([String(name), ...args]) },
+  })
+  return { writes, actions }
+}
+
 test('the host half is a Loader module with an inert apply', async () => {
   const module = await import(resolve(root, 'lib/index.js'))
   assert.equal(typeof module.apply, 'function')
@@ -147,9 +164,12 @@ test('the stylesheet installer writes one owned style tag', async () => {
     assert.deepEqual(appended, created)
     const css = created[0].textContent
     assert.match(css, /\.dsh-fe-root/)
-    // The format bodies hang off these hooks; a rename would silently drop a
-    // whole display mode.
-    for (const hook of ['.dsh-fe-source', '.dsh-fe-prose', '.dsh-fe-json', '.dsh-fe-image']) {
+    // The format bodies and the tab strip hang off these hooks; a rename would
+    // silently drop a display mode or the whole strip.
+    for (const hook of [
+      '.dsh-fe-source', '.dsh-fe-prose', '.dsh-fe-json', '.dsh-fe-image',
+      '.dsh-fe-tabs', '.dsh-fe-tab-label', '.dsh-fe-tab-close', '.dsh-fe-open-dot',
+    ]) {
       assert.ok(css.includes(hook), `stylesheet lost ${hook}`)
     }
     // Wrapping keeps words whole: the shared code block defaults to break-all,
@@ -227,7 +247,111 @@ test('only JSON a tree can walk parses for the tree view', async () => {
   assert.equal(parseJsonDocument('null'), undefined)
 })
 
-test('the injected face lists directories and reads previews through Remote', async () => {
+test('tab labels disambiguate only the basenames that clash', async () => {
+  const registration = await loadClientFactory()
+  const { tabLabels } = registration.factory(stubRequire())
+  assert.deepEqual(
+    tabLabels(['/w/a.ts', '/w/README.md']),
+    { '/w/a.ts': 'a.ts', '/w/README.md': 'README.md' },
+  )
+  // Two files with one name carry their parent; the unrelated one does not.
+  assert.deepEqual(
+    tabLabels(['/w/src/index.ts', '/w/test/index.ts', '/w/package.json']),
+    {
+      '/w/src/index.ts': 'src/index.ts',
+      '/w/test/index.ts': 'test/index.ts',
+      '/w/package.json': 'package.json',
+    },
+  )
+  // Windows separators and a trailing separator still yield a parent name.
+  assert.deepEqual(
+    tabLabels(['C:\\w\\src\\index.ts', 'C:\\w\\test\\index.ts']),
+    { 'C:\\w\\src\\index.ts': 'src/index.ts', 'C:\\w\\test\\index.ts': 'test/index.ts' },
+  )
+})
+
+test('the store opens one tab per file, focuses and closes like an editor', async () => {
+  const registration = await loadClientFactory()
+  const client = registration.factory(stubRequire())
+  const fake = fakeContext({ list: async () => ({ ok: true, value: {} }), read: async () => ({ ok: true, value: {} }) })
+  client.apply(fake.ctx)
+  const store = fake.registrations[0].options.store
+  const d = store.init()
+  store.actions.start(d, '/w')
+
+  // Opening the same file twice focuses the tab instead of duplicating it.
+  store.actions.openFile(d, '/w/a.ts')
+  store.actions.openFile(d, '/w/b.ts')
+  store.actions.openFile(d, '/w/a.ts')
+  assert.deepEqual(d.open, ['/w/a.ts', '/w/b.ts'])
+  assert.equal(d.active, '/w/a.ts')
+
+  // Activation stays inside the open set.
+  store.actions.activate(d, '/w/absent.ts')
+  assert.equal(d.active, '/w/a.ts')
+  store.actions.activate(d, '/w/b.ts')
+  assert.equal(d.active, '/w/b.ts')
+
+  // Per-tab preferences are keyed by path, so one tab's choices stay its own.
+  store.actions.setWrap(d, '/w/a.ts', false)
+  store.actions.setMode(d, '/w/b.ts', 'source')
+  assert.deepEqual(d.wraps, { '/w/a.ts': false })
+  assert.deepEqual(d.modes, { '/w/b.ts': 'source' })
+
+  // Closing the active tab shows the neighbour that took its slot.
+  store.actions.openFile(d, '/w/c.ts')
+  store.actions.activate(d, '/w/b.ts')
+  store.actions.closeFile(d, '/w/b.ts')
+  assert.deepEqual(d.open, ['/w/a.ts', '/w/c.ts'])
+  assert.equal(d.active, '/w/c.ts')
+  assert.equal(d.modes['/w/b.ts'], undefined)
+  assert.equal(d.previews['/w/b.ts'], undefined)
+
+  // Closing a background tab leaves the active one alone; closing the last
+  // tab leaves nothing shown.
+  store.actions.closeFile(d, '/w/a.ts')
+  assert.equal(d.active, '/w/c.ts')
+  store.actions.closeFile(d, '/w/c.ts')
+  assert.deepEqual(d.open, [])
+  assert.equal(d.active, null)
+
+  // A settlement for a closed tab writes nothing.
+  store.actions.previewLoaded(d, '/w/c.ts', { kind: 'text', page: { text: 'x', lines: 1, eof: true, bytes: 1 } })
+  assert.equal(d.previews['/w/c.ts'], undefined)
+})
+
+test('the store retains the active tab plus a bounded working set', async () => {
+  const registration = await loadClientFactory()
+  const client = registration.factory(stubRequire())
+  const fake = fakeContext({ list: async () => ({ ok: true, value: {} }), read: async () => ({ ok: true, value: {} }) })
+  client.apply(fake.ctx)
+  const { RETAINED_PREVIEWS } = client
+  const store = fake.registrations[0].options.store
+  const d = store.init()
+  store.actions.start(d, '/w')
+
+  const paths = Array.from({ length: RETAINED_PREVIEWS + 3 }, (_value, index) => `/w/f${index}.ts`)
+  for (const path of paths) {
+    store.actions.openFile(d, path)
+    store.actions.previewLoaded(d, path, { kind: 'text', page: { text: 'x', lines: 1, eof: true, bytes: 1 } })
+  }
+  // Every tab stays open; only the loaded content is bounded.
+  assert.equal(d.open.length, paths.length)
+  assert.equal(Object.keys(d.previews).length, RETAINED_PREVIEWS)
+  assert.ok(d.previews[paths.at(-1)], 'the active tab keeps its content')
+  assert.equal(d.previews[paths[0]], undefined, 'the least recently used tab was dropped')
+
+  // Naming a dropped tab makes it the working set again, and dropping content
+  // never removes the tab itself.
+  store.actions.activate(d, paths[0])
+  assert.equal(d.active, paths[0])
+  assert.equal(d.previews[paths[0]], undefined)
+  store.actions.previewLoaded(d, paths[0], { kind: 'text', page: { text: 'x', lines: 1, eof: true, bytes: 1 } })
+  assert.ok(d.previews[paths[0]])
+  assert.equal(d.open.length, paths.length)
+})
+
+test('the injected face lists directories and reads the tab it is asked for', async () => {
   const registration = await loadClientFactory()
   const client = registration.factory(stubRequire())
   const calls = []
@@ -243,26 +367,30 @@ test('the injected face lists directories and reads previews through Remote', as
   })
   client.apply(fake.ctx)
 
-  const writes = []
-  const actions = new Proxy({}, {
-    get: (_target, name) => (...args) => { writes.push([String(name), ...args]) },
-  })
+  const { writes, actions } = recordingActions()
   const face = fake.registrations[0].options.inject('session-1', actions)
 
   face.list('/tmp')
-  await new Promise(resolve => setImmediate(resolve))
+  await settled()
   assert.deepEqual(calls[0].slice(0, 3), ['list', 'session-1', '/tmp'])
   assert.deepEqual(writes[0], ['loading', '/tmp'])
   assert.deepEqual(writes[1], ['loaded', '/tmp', { entries: [{ name: 'a', type: 'file' }], truncated: false }])
 
   face.read('/tmp/a.txt')
-  await new Promise(resolve => setImmediate(resolve))
+  await settled()
   assert.deepEqual(calls[1].slice(0, 3), ['read', 'session-1', '/tmp/a.txt'])
   assert.deepEqual(calls[1][3], { offset: 1, limit: 2000 })
-  assert.deepEqual(writes[2], ['selecting', '/tmp/a.txt'])
+  assert.deepEqual(writes[2], ['reading', '/tmp/a.txt'])
   assert.deepEqual(writes[3], ['previewLoaded', '/tmp/a.txt', {
     kind: 'text', page: { text: 'hello', lines: 1, eof: true, bytes: 5 },
   }])
+
+  // A second read of the same tab retires the first: only the newer settlement
+  // is written, which is what makes Reload safe against a slow first response.
+  face.read('/tmp/a.txt')
+  await settled()
+  assert.equal(writes.filter(write => write[0] === 'previewLoaded').length, 2)
+  assert.equal(writes.filter(write => write[0] === 'reading').length, 2)
 })
 
 test('an image format reads complete bytes instead of a page of lines', async () => {
@@ -279,14 +407,11 @@ test('an image format reads complete bytes instead of a page of lines', async ()
   })
   client.apply(fake.ctx)
 
-  const writes = []
-  const actions = new Proxy({}, {
-    get: (_target, name) => (...args) => { writes.push([String(name), ...args]) },
-  })
+  const { writes, actions } = recordingActions()
   const face = fake.registrations[0].options.inject('session-1', actions)
 
   face.read('/tmp/shot.PNG')
-  await new Promise(resolve => setImmediate(resolve))
+  await settled()
   assert.deepEqual(calls[0].slice(0, 3), ['readAll', 'session-1', '/tmp/shot.PNG'])
   assert.deepEqual(writes[1], ['previewLoaded', '/tmp/shot.PNG', {
     kind: 'image', image: { dataUrl: 'data:image/png;base64,QUJD', bytes: 3 },
@@ -294,11 +419,11 @@ test('an image format reads complete bytes instead of a page of lines', async ()
 
   // A text suffix on the same face still takes the paged read.
   face.read('/tmp/a.txt')
-  await new Promise(resolve => setImmediate(resolve))
+  await settled()
   assert.deepEqual(calls[1].slice(0, 3), ['read', 'session-1', '/tmp/a.txt'])
 })
 
-test('a failed listing and a failed preview report the Remote failure', async () => {
+test('a failed listing and a failed read report the Remote failure', async () => {
   const registration = await loadClientFactory()
   const client = registration.factory(stubRequire())
   const failure = { code: 'workspace-file/not-text', message: 'not text' }
@@ -308,17 +433,14 @@ test('a failed listing and a failed preview report the Remote failure', async ()
   })
   client.apply(fake.ctx)
 
-  const writes = []
-  const actions = new Proxy({}, {
-    get: (_target, name) => (...args) => { writes.push([String(name), ...args]) },
-  })
+  const { writes, actions } = recordingActions()
   const face = fake.registrations[0].options.inject('session-1', actions)
 
   face.list('/tmp')
-  await new Promise(resolve => setImmediate(resolve))
+  await settled()
   assert.deepEqual(writes[1], ['failed', '/tmp', failure])
 
   face.read('/tmp/a.bin')
-  await new Promise(resolve => setImmediate(resolve))
+  await settled()
   assert.deepEqual(writes[3], ['previewFailed', '/tmp/a.bin', failure])
 })

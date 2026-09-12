@@ -1,6 +1,6 @@
 /**
- * The explorer's asynchronous half: listing directories, and reading the
- * selected file in whichever form its format needs.
+ * The explorer's asynchronous half: listing directories, and reading whichever
+ * file a tab asks for in the form its format needs.
  *
  * The component never awaits anything. It calls `list` / `read`, and this face
  * performs the Remote call and writes the outcome through the store's own
@@ -9,11 +9,11 @@
  *
  * One level has one listing in force: asking for a level again (the reload
  * gesture, a directory reopened after a reset) retires the listing still in
- * flight for it, whose settlement then writes nothing. The preview is the same
- * with one generation, and the store additionally drops a settlement whose path
- * is no longer selected. Requests carry the plugin's lifetime signal: unloading
- * the plugin abandons everything in flight, and no settlement writes after
- * that.
+ * flight for it, whose settlement then writes nothing. Each tab has one read in
+ * force in the same way, and the store additionally drops a settlement for a tab
+ * that has since been closed. Requests carry the plugin's lifetime signal:
+ * unloading the plugin abandons everything in flight, and no settlement writes
+ * after that.
  */
 import type { BoundActions } from '@deepseek-ai/dsh-client-store'
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
@@ -39,9 +39,9 @@ export interface FilesInjected {
    */
   readonly list: (path: string) => void
   /**
-   * Read one file into the store: a page of text, or complete bytes when the
+   * Read one open tab into the store: a page of text, or complete bytes when the
    * file's format draws an image.
-   * @param path - absolute file path.
+   * @param path - absolute file path of an open tab.
    */
   readonly read: (path: string) => void
 }
@@ -61,18 +61,18 @@ export function filesFace(
   actions: BoundActions<ReturnType<typeof createFilesStore>>,
 ): FilesInjected {
   /** Per absolute path: the listing generation a settlement must match; the latest request wins. */
-  const generations = new Map<string, number>()
-  /** The preview generation a settlement must match. */
-  let previewGeneration = 0
+  const listingGenerations = new Map<string, number>()
+  /** Per open tab: the read generation a settlement must match; the latest request wins. */
+  const readGenerations = new Map<string, number>()
 
   return {
     list(path) {
       if (signal.aborted) return
-      const generation = (generations.get(path) ?? 0) + 1
-      generations.set(path, generation)
+      const generation = (listingGenerations.get(path) ?? 0) + 1
+      listingGenerations.set(path, generation)
       actions.loading(path)
       void remote.workspaceFiles.list(sessionId, path, signal).then((result) => {
-        if (signal.aborted || generations.get(path) !== generation) return
+        if (signal.aborted || listingGenerations.get(path) !== generation) return
         if (result.ok) {
           actions.loaded(path, {
             entries: result.value.entries,
@@ -85,12 +85,12 @@ export function filesFace(
     },
     read(path) {
       if (signal.aborted) return
-      previewGeneration += 1
-      const generation = previewGeneration
+      const generation = (readGenerations.get(path) ?? 0) + 1
+      readGenerations.set(path, generation)
       const format = previewFormatFor(path)
-      actions.selecting(path)
+      actions.reading(path)
       const settle = (write: () => void): void => {
-        if (signal.aborted || previewGeneration !== generation) return
+        if (signal.aborted || readGenerations.get(path) !== generation) return
         write()
       }
       // An image needs its bytes whole; everything else needs a page of lines,

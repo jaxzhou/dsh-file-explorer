@@ -66,9 +66,9 @@ request and a client row that can answer it.
 |---|---|
 | `src/index.ts` | Host half: an inert Loader module |
 | `src/client/index.ts` | Client plugin: stylesheet, dictionaries, and the `conversation.view` registration |
-| `src/client/FilesView.tsx` | The two-pane page: tree, headers, and the per-format preview bodies |
+| `src/client/FilesView.tsx` | The two-pane page: tree, tab strip, headers, and the per-format preview bodies |
 | `src/client/format.ts` | Suffix → preview format, and the grammar/media-type tables |
-| `src/client/store.ts` | The exclusive per-session view store |
+| `src/client/store.ts` | The exclusive per-session view store: tree state, open tabs, and the bounded preview content |
 | `src/client/face.ts` | The injected face: Remote listing, paged text reads, and complete-byte image reads |
 | `src/client/styles.ts` | The plugin-owned stylesheet |
 | `src/client/locales.ts` | `fileExplorer` dictionaries (zh, en) and the namespace declaration |
@@ -115,7 +115,9 @@ Two more npm facts worth remembering:
 
 ## Regenerating the demo
 
-The README embeds a GIF and links the MP4 beside it. GitHub renders a committed
+The committed recording **predates preview tabs** — it shows one file at a time —
+so re-record it before promoting a release that has them. The README embeds a GIF
+and links the MP4 beside it. GitHub renders a committed
 video only on its own file page, so the animation is what plays inline; the link
 is the same recording at full quality. `media/` is documentation only — it is
 outside the package's `files` list and never ships in the npm tarball.

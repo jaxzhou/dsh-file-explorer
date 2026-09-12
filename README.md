@@ -29,9 +29,15 @@ offers a Rendered/Source toggle](media/demo.gif)](media/demo.mp4)
 ## What you get
 
 The left pane is the session's working directory, listed one level at a time,
-directories first. An expanded level stays expanded while you move between tabs.
+directories first. An expanded level stays expanded while you move between
+preview tabs.
 
-The right pane picks its body from the file:
+Clicking a file opens it in a tab, so several files stay open at once — each with
+its own body and its own wrap setting. A file that is already open is focused
+rather than reopened, tabs whose names collide show their directory, and the tab's
+× or a middle click closes one.
+
+The right pane picks each tab's body from the file:
 
 | Category | Preview |
 |---|---|
@@ -117,6 +123,8 @@ restart the profile.
   text, never an approximation.
 - **Listing only** — no search, rename, context menu, or file watching; a level
   refreshes through **Reload**.
+- **Loaded previews are bounded.** A working set of five tabs keeps its content;
+  an older tab stays open and reads again when you return to it.
 - **One root.** The tree is rooted at the session's working directory, and the
   Host refuses directory listings outside the workspace root.
 - **Markdown has no workspace vocabulary.** Relative image paths and file
