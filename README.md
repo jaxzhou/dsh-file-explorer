@@ -11,9 +11,10 @@ English | [中文](README.zh.md)
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that
 adds a **Files** tab to the Conversation View strip — the same level as **Chat**
-and **Trajectory** — showing the session workspace as a tree with a basic text
-preview beside it.
+and **Trajectory** — showing the session workspace as a tree, with a preview body
+chosen per file category beside it.
 
+## Demo
 
 [![The Files tab beside Chat and Trajectory: a workspace tree on the left, and
 on the right a preview that highlights source, renders Markdown and JSON, and
