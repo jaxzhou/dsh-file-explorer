@@ -20,7 +20,7 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /** Package name; also the module id stamped into the loader handoff. */
-const ID = 'dsh-file-explorer'
+const ID = '@jaxzhou/dsh-file-explorer'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 

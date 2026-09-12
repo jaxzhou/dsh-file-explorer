@@ -1,4 +1,4 @@
-# dsh-file-explorer — contributor notes
+# @jaxzhou/dsh-file-explorer — contributor notes
 
 ## DeepSeek Harness plugin development
 

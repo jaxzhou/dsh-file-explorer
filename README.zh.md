@@ -1,6 +1,13 @@
 # dsh-file-explorer
 
+[![npm](https://img.shields.io/npm/v/@jaxzhou/dsh-file-explorer.svg)](https://www.npmjs.com/package/@jaxzhou/dsh-file-explorer)
+[![license](https://img.shields.io/npm/l/@jaxzhou/dsh-file-explorer.svg)](LICENSE)
+
 [English](README.md) | 中文
+
+> npm 上的包名是 **`@jaxzhou/dsh-file-explorer`**。无作用域的
+> `dsh-file-explorer`、`dsh-files`、`dsh-workspace-files` 已被其他作者的插件占
+> 用，因此本插件带上发布者作用域。
 
 一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件：
 在对话视图的标签栏中新增 **文件** 标签，与 **对话**、**轨迹** 同级，左侧是会话
@@ -68,9 +75,18 @@ bundle 已挂载；headless / SDK 等无浏览器界面不会出现该标签。
 
 ## 安装
 
+从 npm 安装：
+
+```sh
+dsh plugin --profile web add @jaxzhou/dsh-file-explorer
+dsh --profile web            # 重启 profile；bundle 成员在启动时生效
+```
+
+从本仓库安装（本地检出或 git ref），均无需构建——运行产物已提交：
+
 ```sh
 dsh plugin --profile web add /path/to/dsh-file-explorer
-dsh --profile web            # 重启 profile；bundle 成员在启动时生效
+dsh plugin --profile web add github:jaxzhou/dsh-file-explorer
 ```
 
 如果使用自定义 profile（不是官方的 `web`），先基于 Web 模板创建，以保证浏览器
@@ -78,7 +94,7 @@ dsh --profile web            # 重启 profile；bundle 成员在启动时生效
 
 ```sh
 dsh --profile myprofile --from-default-profile web
-dsh plugin --profile myprofile add /path/to/dsh-file-explorer
+dsh plugin --profile myprofile add @jaxzhou/dsh-file-explorer
 dsh --profile myprofile
 ```
 
@@ -88,13 +104,13 @@ dsh --profile myprofile
 ### 验证安装
 
 ```sh
-dsh --profile web --dump-config | grep -A 2 'dsh-file-explorer'
+dsh --profile web --dump-config | grep -A 2 'jaxzhou-file-explorer'
 ```
 
-输出中应出现 `# == dsh-file-explorer` 层，以及名为 `dsh-file-explorer` 的行。
-随后在运行中的 Web 界面里：开发者工具的网络面板中，插件 bundle 位于某个
-`/plugins/??…` 合并响应内；插件加载后页面 head 中会出现
-`<style data-dsh-file-explorer>` 标签。
+输出中应出现 `# == @jaxzhou/dsh-file-explorer` 层，以及名为
+`@jaxzhou/dsh-file-explorer` 的行。随后在运行中的 Web 界面里：开发者工具的网络
+面板中，插件 bundle 位于某个 `/plugins/??…` 合并响应内；插件加载后页面 head 中会
+出现 `<style data-dsh-file-explorer>` 标签。
 
 ## 停用与卸载
 
@@ -102,13 +118,13 @@ dsh --profile web --dump-config | grep -A 2 'dsh-file-explorer'
   添加行覆盖：
 
   ```yaml
-  - id: dsh-file-explorer
+  - id: jaxzhou-file-explorer
     disabled: true
   ```
 
   删掉该条目并保存即可恢复；`patchReload: live` 的 profile 无需重启。
 
-- **卸载**：`dsh plugin --profile web remove dsh-file-explorer`，然后重启
+- **卸载**：`dsh plugin --profile web remove @jaxzhou/dsh-file-explorer`，然后重启
   profile。
 
 ## 数据路径与权限
@@ -136,7 +152,7 @@ tarball 安装时直接加载，不需要构建步骤，也不需要 `allowBuild
 经典脚本方式抓取它：
 
 ```js
-window.__ModuleLoader__.load({ id: 'dsh-file-explorer', factory: (require) => { … } })
+window.__ModuleLoader__.load({ id: '@jaxzhou/dsh-file-explorer', factory: (require) => { … } })
 ```
 
 `scripts/build.mjs` 用 esbuild 产出该形式并随后校验。只有 shell 冻结的模块表保持

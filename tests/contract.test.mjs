@@ -105,7 +105,7 @@ test('the host half is a Loader module with an inert apply', async () => {
 
 test('the client bundle materializes and registers one Files Conversation View', async () => {
   const registration = await loadClientFactory()
-  assert.equal(registration.id, 'dsh-file-explorer')
+  assert.equal(registration.id, '@jaxzhou/dsh-file-explorer')
   const client = registration.factory(stubRequire())
   assert.equal(typeof client.apply, 'function')
   assert.deepEqual(client.inject, ['slots', 'locale', 'remote', 'remote.workspaceFiles'])

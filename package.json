@@ -1,7 +1,7 @@
 {
-  "name": "dsh-file-explorer",
+  "name": "@jaxzhou/dsh-file-explorer",
   "version": "0.1.0",
-  "description": "DeepSeek Harness plugin: a workspace file browser with a basic preview, shown as a Conversation View tab beside Chat and Trajectory",
+  "description": "DeepSeek Harness plugin: a workspace file browser with a per-format preview (rendered Markdown, a JSON tree, 24 syntax grammars, images), shown as a Conversation View tab beside Chat and Trajectory",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -24,9 +24,22 @@
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
+    "dsh",
     "file-explorer",
-    "file-preview"
+    "file-browser",
+    "file-preview",
+    "markdown-preview",
+    "json-viewer",
+    "syntax-highlighting"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jaxzhou/dsh-file-explorer.git"
+  },
+  "homepage": "https://github.com/jaxzhou/dsh-file-explorer#readme",
+  "bugs": {
+    "url": "https://github.com/jaxzhou/dsh-file-explorer/issues"
+  },
   "engines": {
     "node": ">=22.19.0"
   },
@@ -46,14 +59,24 @@
       ]
     }
   },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "build": "node scripts/build.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "npm run typecheck && npm run build && npm test"
+    "check": "npm run typecheck && npm run build && npm test",
+    "prepublishOnly": "npm run check"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",

@@ -1,6 +1,13 @@
 # dsh-file-explorer
 
+[![npm](https://img.shields.io/npm/v/@jaxzhou/dsh-file-explorer.svg)](https://www.npmjs.com/package/@jaxzhou/dsh-file-explorer)
+[![license](https://img.shields.io/npm/l/@jaxzhou/dsh-file-explorer.svg)](LICENSE)
+
 English | [中文](README.zh.md)
+
+> Published on npm as **`@jaxzhou/dsh-file-explorer`**. The unscoped names
+> `dsh-file-explorer`, `dsh-files` and `dsh-workspace-files` belong to other
+> authors' plugins, so this one carries its publisher's scope.
 
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) plugin that
 adds a **Files** tab to the Conversation View strip — the same level as **Chat**
@@ -63,9 +70,19 @@ needs setting.
 
 ## Install
 
+From npm:
+
+```sh
+dsh plugin --profile web add @jaxzhou/dsh-file-explorer
+dsh --profile web            # restart the profile; bundle membership is a startup boundary
+```
+
+From this repository (a checkout or a git ref), which builds nothing — the
+runtime artifacts are committed:
+
 ```sh
 dsh plugin --profile web add /path/to/dsh-file-explorer
-dsh --profile web            # restart the profile; bundle membership is a startup boundary
+dsh plugin --profile web add github:jaxzhou/dsh-file-explorer
 ```
 
 For a custom profile that is not the shipped `web` one, create it from the Web
@@ -73,7 +90,7 @@ template first so the browser composition exists:
 
 ```sh
 dsh --profile myprofile --from-default-profile web
-dsh plugin --profile myprofile add /path/to/dsh-file-explorer
+dsh plugin --profile myprofile add @jaxzhou/dsh-file-explorer
 dsh --profile myprofile
 ```
 
@@ -84,13 +101,13 @@ directory.
 ### Verify the install
 
 ```sh
-dsh --profile web --dump-config | grep -A 2 'dsh-file-explorer'
+dsh --profile web --dump-config | grep -A 2 'jaxzhou-file-explorer'
 ```
 
-The dump must show a `# == dsh-file-explorer` layer and a row named
-`dsh-file-explorer`. Then, in the running Web UI, a browser devtools network
-panel shows the plugin bundle inside one `/plugins/??…` combo response, and the
-page head carries a `<style data-dsh-file-explorer>` tag once the plugin
+The dump must show a `# == @jaxzhou/dsh-file-explorer` layer and a row named
+`@jaxzhou/dsh-file-explorer`. Then, in the running Web UI, a browser devtools
+network panel shows the plugin bundle inside one `/plugins/??…` combo response,
+and the page head carries a `<style data-dsh-file-explorer>` tag once the plugin
 materializes.
 
 ## Disable and uninstall
@@ -99,15 +116,15 @@ materializes.
   `cordis.patch.yml` (applied after every bundle layer):
 
   ```yaml
-  - id: dsh-file-explorer
+  - id: jaxzhou-file-explorer
     disabled: true
   ```
 
   Removing that entry and saving brings the tab back: a `patchReload: live`
   profile re-applies the file without a restart.
 
-- **Uninstall** — `dsh plugin --profile web remove dsh-file-explorer`, then
-  restart the profile.
+- **Uninstall** — `dsh plugin --profile web remove @jaxzhou/dsh-file-explorer`,
+  then restart the profile.
 
 ## Data path and permissions
 
@@ -138,7 +155,7 @@ The browser half must be a lazy CommonJS factory handoff, because the dsh Web
 loader fetches it as a classic script:
 
 ```js
-window.__ModuleLoader__.load({ id: 'dsh-file-explorer', factory: (require) => { … } })
+window.__ModuleLoader__.load({ id: '@jaxzhou/dsh-file-explorer', factory: (require) => { … } })
 ```
 
 `scripts/build.mjs` emits that shape with esbuild and then verifies it. Only the
@@ -165,8 +182,7 @@ renderer.
 | `src/client/face.ts` | The injected face: Remote listing, paged text reads, and complete-byte image reads |
 | `src/client/styles.ts` | The plugin-owned stylesheet |
 | `src/client/locales.ts` | `fileExplorer` dictionaries (zh, en) and the namespace declaration |
-| `cordis.patch.yml` | The bundle layer: one inserted row |
-| `tests/contract.test.mjs` | Contract tests over the built artifacts |
+| `cordis.patch.yml` | The bundle layer: one inserted row || `tests/contract.test.mjs` | Contract tests over the built artifacts |
 
 Each source focus is a separate module with its own header comment; start there
 for the reasoning behind a choice.

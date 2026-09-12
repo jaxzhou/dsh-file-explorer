@@ -65,15 +65,15 @@ export const FILES_VIEW_ID = 'files'
  * @param ctx - client root context carrying the slot registry, copy, and Remote face.
  */
 export function apply(ctx: Context): void {
-  ctx.effect(installStyles, 'dsh-file-explorer: stylesheet')
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-file-explorer: dictionaries')
+  ctx.effect(installStyles, '@jaxzhou/dsh-file-explorer: stylesheet')
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), '@jaxzhou/dsh-file-explorer: dictionaries')
   // Registration-time text (the view tab label) reads through the bound
   // translate as a thunk, so it follows the active locale without
   // re-registration.
   const t = ctx.locale.bind(NS)
   const store = createFilesStore()
   const lifetime = new AbortController()
-  ctx.effect(() => () => { lifetime.abort() }, 'dsh-file-explorer: request lifetime')
+  ctx.effect(() => () => { lifetime.abort() }, '@jaxzhou/dsh-file-explorer: request lifetime')
 
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',

@@ -1,5 +1,5 @@
 /**
- * Host half of the `dsh-file-explorer` plugin.
+ * Host half of the `@jaxzhou/dsh-file-explorer` plugin.
  *
  * The plugin is browser-only. Its file tree and preview read through the
  * `workspaceFiles` Remote namespace that the Web composition already mounts

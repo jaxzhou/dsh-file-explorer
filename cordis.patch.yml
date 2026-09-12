@@ -1,4 +1,4 @@
-# Bundle layer of dsh-file-explorer.
+# Bundle layer of @jaxzhou/dsh-file-explorer.
 #
 # Applied after every earlier bundle layer when a profile lists this package in
 # `dsh.profile.bundles`. The single row mounts the plugin's Host half (an inert
@@ -6,6 +6,11 @@
 # module system, which serves `lib/client.js` to the browser. The browser half
 # registers the "Files" Conversation View tab; unloading this row removes the
 # tab again.
+#
+# The row `name` is the installed package name — scoped, so it cannot collide
+# with another author's plugin. The `id` is what a profile's own patch layer
+# overrides (to disable the tab without uninstalling), and it carries the scope
+# for the same reason.
 - insert:
-    - id: dsh-file-explorer
-      name: dsh-file-explorer
+    - id: jaxzhou-file-explorer
+      name: '@jaxzhou/dsh-file-explorer'
