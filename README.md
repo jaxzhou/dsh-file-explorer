@@ -48,7 +48,9 @@ The right pane picks each tab's body from the file:
 | **Anything else** | Numbered plain text — an unmapped suffix (`.vue`, `.proto`, `.txt`) stays plain rather than guessing a wrong grammar |
 
 Text previews wrap at their spaces and keep every word whole; an image reads its
-complete bytes.
+complete bytes. Every text body carries a **Copy** control in the pane's toolbar,
+which copies the file's own text — a rendered Markdown document copies its
+Markdown source.
 
 ## Requirements
 

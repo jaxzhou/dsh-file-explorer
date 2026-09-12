@@ -65,6 +65,7 @@ function stubRequire() {
           MarkdownText: noop,
           classifyFileType: () => 'other',
           fileSizeText: bytes => `${bytes}B`,
+          writeClipboard: async () => true,
         }
       default: throw new Error(`unexpected module request: ${specifier}`)
     }
@@ -169,6 +170,7 @@ test('the stylesheet installer writes one owned style tag', async () => {
     for (const hook of [
       '.dsh-fe-source', '.dsh-fe-prose', '.dsh-fe-json', '.dsh-fe-image',
       '.dsh-fe-tabs', '.dsh-fe-tab-label', '.dsh-fe-tab-close', '.dsh-fe-open-dot',
+      '.dsh-fe-lang',
     ]) {
       assert.ok(css.includes(hook), `stylesheet lost ${hook}`)
     }
@@ -178,6 +180,13 @@ test('the stylesheet installer writes one owned style tag', async () => {
     assert.match(css, /overflow-wrap:\s*break-word/)
     assert.doesNotMatch(css, /overflow-wrap:\s*anywhere/)
     assert.doesNotMatch(css, /word-break:\s*break-all/)
+    // The header row must not share the content's surface, and the code block's
+    // own banner must stay hidden so one copy control exists per pane.
+    assert.match(css, /\.dsh-fe-head\s*\{[^}]*background:\s*var\(--dsw-alias-bg-skeleton\)/)
+    // The banner must be matched as a descendant: CodeBlock nests it inside a
+    // sticky wrapper, so a direct-child selector silently hides nothing.
+    assert.match(css, /\.dsh-fe-source \[data-code-block-banner\]/)
+    assert.match(css, /--dsl-code-block-line-white-space:\s*pre-wrap/)
   } finally {
     delete globalThis.document
   }

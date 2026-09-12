@@ -24,13 +24,13 @@
  * read left in flight when that happens settles into the store anyway, because
  * the face's requests ride the plugin's lifetime, not the component's.
  */
-import { useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InjectFace, PropsLocale, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
 import {
   CodeBlock, FileTypeIcon, IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, JsonTree,
-  MarkdownText, classifyFileType, fileSizeText,
+  MarkdownText, classifyFileType, fileSizeText, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { JsonTreeLabels, MarkdownLabels } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
@@ -507,6 +507,13 @@ export function FilesView({
   const cwd = useSessions(sessions => sessions.byId[sessionId]?.cwd)
   const state = useStore(store => store)
   const activeTabRef = useRef<HTMLButtonElement | null>(null)
+  /** The tab whose text was just copied, so only its button confirms. */
+  const [copied, setCopied] = useState<string | null>(null)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => () => {
+    if (copyTimer.current !== null) clearTimeout(copyTimer.current)
+  }, [])
 
   useEffect(() => {
     if (cwd === undefined || state.root === cwd) return
@@ -575,6 +582,20 @@ export function FilesView({
   }
   const reloadPreview = (): void => {
     if (active !== null) read(active)
+  }
+  // One copy control serves every body that has text: a rendered document's
+  // source, a JSON tree's document, highlighted code, and plain text all copy
+  // the file's own text, which is what a reader pastes somewhere else.
+  const copyActive = (): void => {
+    if (active === null || content === null || content.kind !== 'text') return
+    const path = active
+    const text = content.page.text
+    void writeClipboard(text).then((ok: boolean) => {
+      if (!ok) return
+      setCopied(path)
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current)
+      copyTimer.current = setTimeout(() => { setCopied(null) }, 1000)
+    })
   }
   const closeTab = (path: string): void => {
     actions.closeFile(path)
@@ -673,8 +694,23 @@ export function FilesView({
                   })}
                 </div>
               )}
+            {active !== null && body === 'source' && format?.lang !== undefined && (
+              <span className="dsh-fe-lang" data-preview-lang-badge>{format.lang}</span>
+            )}
             {content !== null && meta !== null && (
               <span className="dsh-fe-meta" data-preview-meta>{meta}</span>
+            )}
+            {content !== null && content.kind === 'text' && (
+              <button
+                type="button"
+                className="dsh-fe-tool"
+                aria-label={t('preview.copy')}
+                title={t('preview.copy')}
+                data-preview-copy
+                onClick={copyActive}
+              >
+                {copied === active ? t('preview.copied') : t('preview.copy')}
+              </button>
             )}
             {active !== null && format !== null && hasSourceToggle(format) && (
               <button

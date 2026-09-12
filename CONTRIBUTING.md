@@ -80,6 +80,17 @@ for the reasoning behind a choice.
 
 ## Traps this repository has already hit
 
+### The palette carries no mid-grey surface in light mode
+
+The pane headers are filled, so the chrome does not read as the first line of the
+file — and only `--dsw-alias-bg-skeleton` does the job. In light mode
+`bg-base`, `bg-layer-1/2/3`, `markdown-code-block` and `bg-module-platform` are
+pure white or within 2% of it (a `#f9fafb` bar on a `#fff` page is invisible),
+and `bg-overlay` — the one clearly distinct grey — is a menu surface that turns
+mid-grey (`#61666b`) in dark mode. The wash used instead is 4% ink in light and
+8% in dark, which is also light enough that a hovered control inside the row
+stays visible. If the theme gains a real toolbar-surface token, use it there.
+
 ### A `link:` install breaks when the package is renamed
 
 `dsh plugin --profile <p> add /path/to/checkout` records a dependency keyed by the

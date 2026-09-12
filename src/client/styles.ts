@@ -64,7 +64,24 @@ const CSS = `
   box-sizing: border-box;
   height: 38px;
   padding: 0 6px 0 14px;
+  /* The row is filled rather than transparent, so the pane's chrome reads as
+     chrome instead of as the first line of the file. The palette's layer tokens
+     are all pure white in light mode (bg-base, bg-layer-1/2/3 share a value), so
+     the only token that separates a surface from the content in BOTH themes is
+     this wash: 4% ink in light, 8% in dark. See the note in CONTRIBUTING.md. */
+  background: var(--dsw-alias-bg-skeleton);
   border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+}
+
+/* A grammar badge for the source body, which is where the language used to be
+   named: the code block's own banner is hidden in this pane so there is exactly
+   one copy control, in this row. */
+.dsh-fe-lang {
+  flex: 0 0 auto;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .dsh-fe-path {
@@ -229,7 +246,15 @@ const CSS = `
   margin: 0;
 }
 
-.dsh-fe-source .md-code-block > [data-code-block-banner] > div:first-child:empty {
+/* One copy control per pane, in the header row above: the code block's own
+   banner would be a second, inside the scrollport, and it scrolls away. The
+   grammar it named is shown as the header's badge instead. Markdown fences keep
+   their banners — there, a banner belongs to the fence, not to the file.
+
+   The banner sits inside a sticky wrapper, hence the descendant match plus the
+   :has rule that takes the wrapper out with it. */
+.dsh-fe-source [data-code-block-banner],
+.dsh-fe-source .md-code-block > div:has(> [data-code-block-banner]) {
   display: none;
 }
 
@@ -267,7 +292,7 @@ const CSS = `
   flex: 1 1 auto;
   gap: 2px;
   align-items: stretch;
-  min-width: 0;
+  min-width: 90px;
   height: 100%;
   overflow-x: auto;
   overflow-y: hidden;
