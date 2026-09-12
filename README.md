@@ -7,22 +7,6 @@ adds a **Files** tab to the Conversation View strip — the same level as **Chat
 and **Trajectory** — showing the session workspace as a tree with a basic text
 preview beside it.
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  Workspace / project                        [ Chat | Trajectory | Files ] │
-├───────────────────────┬──────────────────────────────────────────────────┤
-│ ▾ project             │ src/client/index.ts        165 lines · 6.2KB  ⇥ ⟳ │
-│   ▸ lib               │ ──────────────────────────────────────────────── │
-│   ▸ node_modules      │  1 │ /**                                      │
-│   ▸ scripts           │  2 │  * Browser half: register `files` as one  │
-│   ▾ src               │  3 │  * Conversation View.                     │
-│     ▸ client          │  4 │  */                                       │
-│     index.ts          │  5 │ import type { Context } from '@deepseek-  │
-│   package.json        │    │ ai/cordis'                                │
-└───────────────────────┴──────────────────────────────────────────────────┘
-```
-
-## Demo
 
 [![The Files tab beside Chat and Trajectory: a workspace tree on the left, and
 on the right a preview that highlights source, renders Markdown and JSON, and
