@@ -5,84 +5,57 @@
 
 [English](README.md) | 中文
 
-> npm 上的包名是 **`@jaxzhou/dsh-file-explorer`**。无作用域的
-> `dsh-file-explorer`、`dsh-files`、`dsh-workspace-files` 已被其他作者的插件占
-> 用，因此本插件带上发布者作用域。
+> npm 包名是 **`@jaxzhou/dsh-file-explorer`** —— 无作用域的 `dsh-file-explorer`
+> 属于另一位作者的插件。
 
-一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件：
-在对话视图的标签栏中新增 **文件** 标签，与 **对话**、**轨迹** 同级，左侧是会话
-工作区的目录树，右侧是按文件类别选择的预览体。
+为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 增加一个
+**文件** 标签，与 **对话**、**轨迹** 并列：左侧是会话工作区的目录树，右侧的预览
+会按文件本身决定形态 —— 渲染后的 Markdown、JSON 树、语法高亮源码、图片，或纯
+文本。只读、无需配置、不落任何数据。
 
 ```sh
 dsh plugin --profile web add @jaxzhou/dsh-file-explorer
 dsh --profile web
 ```
 
-跳到 [安装详情](#安装)、[验证安装](#验证安装)，或[停用与卸载](#停用与卸载)。
-
 ## 演示
 
 [![文件标签与对话、轨迹并列：左侧是工作区目录树，右侧是预览——可高亮源码、渲染
 Markdown 与 JSON，并提供「预览/源码」切换](media/demo.gif)](media/demo.mp4)
 
-*30 秒录屏 —— 点击可打开完整画质的 MP4。* 录屏浏览了一个 Flutter + NestJS 工作
-区，依次预览 TypeScript、Swift、Dart、HTML、YAML、JavaScript 源码（带语法高亮与
-行号），用 **预览 / 源码** 切换展示同一个 `README.md` 的渲染结果与原文，最后停在
-一个会先自我解释、再回退到高亮源码的 `tsconfig.json` 上——它尾部的逗号让它成为
-JSONC 而非严格 JSON，所以无法展开成树。
+*30 秒录屏 —— 点击可打开完整画质的 MP4。*
 
-## 功能
+## 能做什么
 
-- **工作区目录树**：以会话的工作目录为根，逐层读取；目录在前，文件按自然名
-  称排序。某一层在首次展开时读取，折叠后仍保留内容。
-- **按文件类别选择合适的预览体**：
+左栏是会话的工作目录，逐层展开，目录在前；展开过的层级在切换标签后仍然保持。
 
-  | 类别 | 后缀 | 显示 |
-  |---|---|---|
-  | Markdown | `md` `markdown` `mkd` `mdown` `mdwn` | 直接渲染为 GFM 文档：标题、表格、任务列表、引用、KaTeX 公式、脚注，代码围栏带语法高亮；带 **源码** 切换 |
-  | JSON | `json` `jsonc` `jsonl` `ndjson` `map` `webmanifest` | 可折叠树，每个值可单独复制；同样带 **源码** 切换。无法展开的文件会在高亮源码上方说明原因——语法错误、被截断、纯标量，或 `tsconfig.json` 这类文件里实际存在的 JSONC |
-  | 源码 | 24 种语法：TypeScript/JavaScript、shell、Python、Ruby、Go、Rust、Java、C、C++、C#、Kotlin、Swift、PHP、YAML、TOML、INI、HTML、CSS、SCSS、Less、SQL、XML、Lua、MDX | 语法高亮 + 行号 + 复制按钮 |
-  | 图片 | `png` `apng` `jpg` `jpeg` `jfif` `gif` `webp` `avif` `bmp` `ico` `svg` | 直接绘制，居中并在超出时缩放到窗格宽度。SVG 通过 `<img>` 绘制，其中的脚本不会执行 |
-  | 其它 | 其余全部后缀 | 带行号、可复制的纯文本 |
+右栏按文件类别选择预览体：
 
-  未映射的语法（`.vue`、`.proto`、`.txt` 等）故意按纯文本显示，而不是猜测：错
-  误的语法着色比不着色更容易误导。
-- **预览读取**：文本类预览只读取前 2 000 行，图片类读取完整字节。超长行在空
-  格处折行，每个单词保持完整；只有内部没有任何断点的 token（超长 URL、压缩后的
-  一整段代码）才会被拆开，因为否则它只能被藏在横向滚动条之外。折行后的续行悬挂
-  在正文下方，而不是行号下方。换行开关只在源码视图出现（那里才有意义）。
-- **状态保留**：展开状态与当前选中文件保存在按会话独占的 store 中，因此切到
-  「对话」再切回来（组件会卸载）不会丢失浏览位置。
+| 类别 | 预览 |
+|---|---|
+| **Markdown** | 直接渲染为 GFM —— 标题、表格、任务列表、引用、公式、脚注、高亮的代码围栏 —— 并带 **源码** 切换 |
+| **JSON** | 可折叠树，每个值可单独复制，同样带 **源码** 切换 |
+| **源码** | 24 种语法的语法高亮、行号与复制按钮：TypeScript/JavaScript、shell、Python、Ruby、Go、Rust、Java、C、C++、C#、Kotlin、Swift、PHP、YAML、TOML、INI、HTML、CSS、SCSS、Less、SQL、XML、Lua、MDX |
+| **图片** | PNG、JPEG、GIF、WebP、AVIF、BMP、ICO、SVG，自动适配窗格。SVG 经 `<img>` 绘制，其中的脚本不会执行 |
+| **其它** | 带行号的纯文本 —— 未映射的后缀（`.vue`、`.proto`、`.txt`）保持纯文本，而不是猜测一个错误的高亮 |
 
-全部为只读：插件只浏览与预览，不会写入、重命名或删除任何文件。
+文本预览在空格处折行、保持单词完整；图片读取完整字节。
 
-## 兼容性
+## 环境要求
 
-针对 **DeepSeek Harness `0.1.5-rc.2`** 的 **Web** 界面（`dsh web`，或由
-`@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app` 组合出的 profile）开发并
-验证。插件依赖组合中的 `@deepseek-ai/dsh-api-workspace-files` 行，官方 Web
-bundle 已挂载；headless / SDK 等无浏览器界面不会出现该标签。
-
-插件本身没有配置项，`cordis.yml` 无需任何设置。
+DeepSeek Harness **0.1.5-rc.2** 的 **Web** 界面 —— `dsh web`，或由
+`@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app` 组合出的 profile。headless
+或 SDK profile 没有浏览器，不会出现该标签。插件没有配置项，`cordis.yml` 无需
+任何设置。
 
 ## 安装
 
-从 npm 安装：
-
 ```sh
 dsh plugin --profile web add @jaxzhou/dsh-file-explorer
-dsh --profile web            # 重启 profile；bundle 成员在启动时生效
+dsh --profile web                 # bundle 成员在启动时读取
 ```
 
-从本仓库安装（本地检出或 git ref），均无需构建——运行产物已提交：
-
-```sh
-dsh plugin --profile web add /path/to/dsh-file-explorer
-dsh plugin --profile web add github:jaxzhou/dsh-file-explorer
-```
-
-如果使用自定义 profile（不是官方的 `web`），先基于 Web 模板创建，以保证浏览器
-组合存在：
+自定义 profile 需要先具备 Web 组合：
 
 ```sh
 dsh --profile myprofile --from-default-profile web
@@ -90,129 +63,59 @@ dsh plugin --profile myprofile add @jaxzhou/dsh-file-explorer
 dsh --profile myprofile
 ```
 
-打开一个已有工作区的会话，点击 **文件** 标签即可。若会话没有工作区目录，标签仍
-会显示，但页面会提示没有工作区目录。
-
-### 验证安装
+偏好本地检出或 git ref？无需构建 —— 运行产物已提交：
 
 ```sh
-dsh --profile web --dump-config | grep -A 2 'jaxzhou-file-explorer'
+dsh plugin --profile web add /path/to/dsh-file-explorer
+dsh plugin --profile web add github:jaxzhou/dsh-file-explorer
 ```
 
-输出中应出现 `# == @jaxzhou/dsh-file-explorer` 层，以及名为
-`@jaxzhou/dsh-file-explorer` 的行。随后在运行中的 Web 界面里：开发者工具的网络
-面板中，插件 bundle 位于某个 `/plugins/??…` 合并响应内；插件加载后页面 head 中会
-出现 `<style data-dsh-file-explorer>` 标签。
+然后打开一个已有工作区的会话，点击 **文件** 标签。确认层已生效：
+
+```sh
+dsh --profile web --dump-config | grep -A 2 jaxzhou-file-explorer
+```
 
 ## 停用与卸载
 
-- **临时停用**：在 profile 的 `cordis.patch.yml`（在所有 bundle 层之后应用）中
-  添加行覆盖：
+不用卸载也能关掉这个标签：在 profile 的 `cordis.patch.yml` 里加一条行覆盖
+（它在所有 bundle 层之后应用；`patchReload: live` 的 profile 无需重启即可生效）：
 
-  ```yaml
-  - id: jaxzhou-file-explorer
-    disabled: true
-  ```
-
-  删掉该条目并保存即可恢复；`patchReload: live` 的 profile 无需重启。
-
-- **卸载**：`dsh plugin --profile web remove @jaxzhou/dsh-file-explorer`，然后重启
-  profile。
-
-## 数据路径与权限
-
-- **读取**走 Harness 自带的 `workspaceFiles` Remote 命名空间：
-  `list(sessionId, path)` 读取一层目录，`read(sessionId, path, { offset, limit })`
-  读取一页文本。是否可读由 Host 组合出的文件系统决定，插件自身不持有文件权限、
-  不做路径解析、不接触任何凭据。
-- **写入**：没有。该 Remote 命名空间不提供任何写操作。
-- **存储**：没有。插件不落盘、不写会话日志；所有状态都是内存中的视图状态，
-  随会话绑定一起释放。
-- **Host 权限**：包的 Host 半边是空实现，不注册服务、工具、提示词片段或事件。
-
-## 开发
-
-```sh
-npm install
-npm run check     # 类型检查 + 构建两个运行产物 + 运行测试
+```yaml
+- id: jaxzhou-file-explorer
+  disabled: true
 ```
 
-`lib/index.js` 与 `lib/client.js` 是**提交进仓库的构建产物**：通过 git 或
-tarball 安装时直接加载，不需要构建步骤，也不需要 `allowBuilds` 授权。
+卸载：`dsh plugin --profile web remove @jaxzhou/dsh-file-explorer`，然后重启
+profile。
 
-浏览器半边必须是由模块加载器接收的惰性 CommonJS 工厂，因为 dsh Web 加载器以
-经典脚本方式抓取它：
+## 隐私
 
-```js
-window.__ModuleLoader__.load({ id: '@jaxzhou/dsh-file-explorer', factory: (require) => { … } })
-```
-
-`scripts/build.mjs` 用 esbuild 产出该形式并随后校验。只有 shell 冻结的模块表保持
-外部依赖（`react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-store`、
-`@deepseek-ai/dsh-client-ui-primitives` 等）；其余 dsh 包都是 type-only 导入，
-编译时即被擦除，因此产物中不会出现模块表无法回答的 `require`。
-
-Markdown 渲染、JSON 树、语法高亮代码块及其行号与复制控件、以及 shiki 语法本身，
-全部来自 `@deepseek-ai/dsh-client-ui-primitives`——shell 已把它共享进模块表。本插
-件贡献的是格式判定与窗格本身，而不是第二套渲染器。
-
-### 目录结构
-
-| 路径 | 作用 |
-|---|---|
-| `src/index.ts` | Host 半边：空的 Loader 模块 |
-| `src/client/index.ts` | 客户端插件：样式表、字典与 `conversation.view` 注册 |
-| `src/client/FilesView.tsx` | 双栏页面：目录树、两处表头，以及按格式分发的预览体 |
-| `src/client/format.ts` | 后缀 → 预览格式，以及语法/媒体类型表 |
-| `src/client/store.ts` | 按会话独占的视图 store |
-| `src/client/face.ts` | 注入面：Remote 列目录、分页读文本、整块读图片字节 |
-| `src/client/styles.ts` | 插件自有样式表 |
-| `src/client/locales.ts` | `fileExplorer` 字典（zh、en）与命名空间声明 |
-| `cordis.patch.yml` | bundle 层：插入一行 |
-| `tests/contract.test.mjs` | 针对构建产物的契约测试 |
-
-每个源文件都是一个独立模块，文件头注释说明了其中的取舍。
-
-### 重新生成演示
-
-README 内嵌一个 GIF、并链接同一段录屏的 MP4。GitHub 只有在视频文件自己的页面上
-才会播放提交进仓库的视频，所以内联动起来的是 GIF；而首帧与链接指向的是同一段
-完整画质的录像。
-
-```sh
-SRC="屏幕录制.mov"
-# 完整画质 MP4：取录制宽度的一半，相当于 2x 截图的清晰度。
-ffmpeg -i "$SRC" -vf scale=1680:-2:flags=lanczos -r 30 \
-  -c:v libx264 -preset slow -crf 24 -pix_fmt yuv420p -movflags +faststart -an media/demo.mp4
-# 内联 GIF：降帧率、缩调色板，体积主要就省在这里。
-ffmpeg -i "$SRC" -vf "fps=12,scale=1200:-2:flags=lanczos,split[a][b];\
-[a]palettegen=max_colors=128:stats_mode=diff[p];\
-[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle" -loop 0 media/demo.gif
-```
-
-`media/` 只用于文档：不在包的 `files` 清单里，因此永远不会进入 npm 包。
+- **只读**：读取走 Harness 自带的 `workspaceFiles` Remote 命名空间，可读性由
+  Host 的文件系统决定。插件自身不持有文件权限、不做路径解析、不接触凭据。
+- **不落数据**：不写磁盘、不写会话日志；视图状态保存在内存中，随会话一起释放。
+- **Host 半边是空实现**：包的 Node 侧不注册任何服务、工具、提示词片段或事件。
 
 ## 已知限制
 
-- **只预览，不编辑**：不写入、不保存、不做 diff。
-- **JSON 按严格语法解析**：带尾逗号的 `tsconfig.json` 属于 JSONC——TypeScript 接
-  受、`JSON.parse` 不接受。此时窗格会说明原因并显示高亮源码，而不是勉强猜出一棵
-  树；注释与尾逗号不会被静默剥除。
-- **Markdown 不解析工作区词汇**：Markdown 里的相对图片路径与文件提及保持原样——
-  只有绝对 `http(s)` 图片会加载——因为解析它们需要阅读器为真实文件背书，而这个
-  窗格不做这件事。
-- **文本预览上限为前 2 000 行**：二进制或非 UTF-8 文件返回
-  `workspace-file/not-text`；超过 Host 完整文件上限的返回
-  `workspace-file/too-large`；更长的文本文件只展示首页并提示已截断，没有
-  「加载更多」。图片受 Host 的完整文件上限约束。
-- **未映射语法不高亮**：共享高亮器携带固定的语法集，集外后缀（`.vue`、
-  `.proto`、`.graphql` 等）按纯文本显示，而不是近似高亮。
-- **仅目录列表**：没有搜索、过滤、重命名、右键菜单、当前文件高亮，也不监听文件
-  系统变化；某一层只通过 **重新读取** 更新。
-- **单一根目录**：目录树以会话工作目录为根，不能向上浏览；Host 本身也拒绝读取
-  工作区根之外的目录列表。
-- **不做编辑**：带行号与换行开关的等宽源码视图，Markdown 则为排版后的文档——
-  没有折叠、搜索和就地编辑。
+- **只预览** —— 不编辑、不保存、不做 diff。
+- **JSON 按严格语法解析**：注释或尾逗号会让文件成为 JSONC，`JSON.parse` 会拒绝
+  —— `tsconfig.json` 是最常见的情况。此时窗格会说明原因并显示高亮源码，而不是
+  勉强猜出一棵树。
+- **文本预览上限 2 000 行**，并提示已截断、没有「加载更多」；二进制文件会说明
+  为何无法显示。
+- **固定的语法集**：共享高亮器未包含的后缀按纯文本显示，绝不做近似高亮。
+- **仅目录列表** —— 没有搜索、重命名、右键菜单，也不监听文件变化；某一层通过
+  **重新读取** 更新。
+- **单一根目录**：目录树以会话工作目录为根，Host 本身也拒绝读取工作区根之外的
+  目录列表。
+- **Markdown 不解析工作区词汇**：相对图片路径与文件提及保持原样，只有绝对
+  `http(s)` 图片会加载。
+
+## 参与开发
+
+构建、检查、产物模型，以及客户端 bundle 如何抵达浏览器：
+[CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证
 
