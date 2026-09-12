@@ -14,6 +14,14 @@ adds a **Files** tab to the Conversation View strip — the same level as **Chat
 and **Trajectory** — showing the session workspace as a tree, with a preview body
 chosen per file category beside it.
 
+```sh
+dsh plugin --profile web add @jaxzhou/dsh-file-explorer
+dsh --profile web
+```
+
+Jump to the [install details](#install), [verification](#verify-the-install), or
+how to [disable and uninstall](#disable-and-uninstall).
+
 ## Demo
 
 [![The Files tab beside Chat and Trajectory: a workspace tree on the left, and
