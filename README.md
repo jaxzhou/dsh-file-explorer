@@ -22,6 +22,19 @@ preview beside it.
 └───────────────────────┴──────────────────────────────────────────────────┘
 ```
 
+## Demo
+
+[![The Files tab beside Chat and Trajectory: a workspace tree on the left, and
+on the right a preview that highlights source, renders Markdown and JSON, and
+offers a Rendered/Source toggle](media/demo.gif)](media/demo.mp4)
+
+*30-second recording — click it for the full-quality MP4.* Walking a Flutter +
+NestJS workspace, it previews TypeScript, Swift, Dart, HTML, YAML and JavaScript
+source with syntax highlighting and line numbers, shows a `README.md` rendered
+and then as source through the **Rendered / Source** toggle, and ends on a
+`tsconfig.json` that explains itself before falling back to highlighted source —
+its trailing comma makes it JSONC, not strict JSON, so no tree can walk it.
+
 ## What it does
 
 - **Workspace tree.** The session's working directory, listed one level at a
@@ -32,7 +45,7 @@ preview beside it.
   | Category | Suffixes | Body |
   |---|---|---|
   | Markdown | `md` `markdown` `mkd` `mdown` `mdwn` | Rendered GFM document — headings, tables, task lists, quotes, KaTeX math, footnotes, and syntax-highlighted code fences — with a **Source** toggle |
-  | JSON | `json` `jsonc` `jsonl` `ndjson` `map` `webmanifest` | Collapsible tree with per-value copy, with a **Source** toggle; a file the tree cannot walk (invalid, truncated, or a bare scalar) says so and shows its highlighted source |
+  | JSON | `json` `jsonc` `jsonl` `ndjson` `map` `webmanifest` | Collapsible tree with per-value copy, with a **Source** toggle; a file the tree cannot walk says so above its highlighted source — a syntax error, a truncated page, a bare scalar, or the JSONC that `tsconfig.json` and friends actually contain |
   | Source code | 24 grammars: TypeScript/JavaScript, shell, Python, Ruby, Go, Rust, Java, C, C++, C#, Kotlin, Swift, PHP, YAML, TOML, INI, HTML, CSS, SCSS, Less, SQL, XML, Lua, MDX | Syntax-highlighted, numbered, with a copy control |
   | Images | `png` `apng` `jpg` `jpeg` `jfif` `gif` `webp` `avif` `bmp` `ico` `svg` | Drawn, centred and scaled to the pane. An SVG draws through `<img>`, so its scripts never run |
   | Anything else | every other suffix | Numbered, copyable plain text |
@@ -174,10 +187,34 @@ renderer.
 Each source focus is a separate module with its own header comment; start there
 for the reasoning behind a choice.
 
+### Regenerating the demo
+
+The README embeds a GIF and links the MP4 beside it. GitHub renders a committed
+video only on its own file page, so the animation is what plays inline; the
+poster frame and the link are the same recording at full quality.
+
+```sh
+SRC="screen recording.mov"
+# Full-quality MP4: half the capture's width, which is a 2x screenshot's worth.
+ffmpeg -i "$SRC" -vf scale=1680:-2:flags=lanczos -r 30 \
+  -c:v libx264 -preset slow -crf 24 -pix_fmt yuv420p -movflags +faststart -an media/demo.mp4
+# Inline GIF: fewer frames and a smaller palette, which is where the bytes go.
+ffmpeg -i "$SRC" -vf "fps=12,scale=1200:-2:flags=lanczos,split[a][b];\
+[a]palettegen=max_colors=128:stats_mode=diff[p];\
+[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle" -loop 0 media/demo.gif
+```
+
+`media/` is documentation only: it is outside the package's `files` list, so it
+never ships in the npm tarball.
+
 ## Known limitations
 
 - **Preview only, no editing.** The viewer reads; it does not write, save, or
   diff.
+- **JSON is parsed strictly.** A `tsconfig.json` with a trailing comma is JSONC,
+  which TypeScript accepts and `JSON.parse` does not; the pane explains that and
+  shows the highlighted source instead of a tree. Comments and trailing commas
+  are not stripped to guess at a tree.
 - **Markdown renders without workspace vocabulary.** Relative image paths and
   file mentions inside a Markdown file stay inert — only absolute `http(s)`
   images load — because resolving them would need the reader to vouch for real

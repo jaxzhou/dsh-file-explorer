@@ -21,6 +21,17 @@
 └───────────────────────┴──────────────────────────────────────────────────┘
 ```
 
+## 演示
+
+[![文件标签与对话、轨迹并列：左侧是工作区目录树，右侧是预览——可高亮源码、渲染
+Markdown 与 JSON，并提供「预览/源码」切换](media/demo.gif)](media/demo.mp4)
+
+*30 秒录屏 —— 点击可打开完整画质的 MP4。* 录屏浏览了一个 Flutter + NestJS 工作
+区，依次预览 TypeScript、Swift、Dart、HTML、YAML、JavaScript 源码（带语法高亮与
+行号），用 **预览 / 源码** 切换展示同一个 `README.md` 的渲染结果与原文，最后停在
+一个会先自我解释、再回退到高亮源码的 `tsconfig.json` 上——它尾部的逗号让它成为
+JSONC 而非严格 JSON，所以无法展开成树。
+
 ## 功能
 
 - **工作区目录树**：以会话的工作目录为根，逐层读取；目录在前，文件按自然名
@@ -30,7 +41,7 @@
   | 类别 | 后缀 | 显示 |
   |---|---|---|
   | Markdown | `md` `markdown` `mkd` `mdown` `mdwn` | 直接渲染为 GFM 文档：标题、表格、任务列表、引用、KaTeX 公式、脚注，代码围栏带语法高亮；带 **源码** 切换 |
-  | JSON | `json` `jsonc` `jsonl` `ndjson` `map` `webmanifest` | 可折叠树，每个值可单独复制；同样带 **源码** 切换。无法展开的文件（语法错误、被截断、或纯标量）会明确提示并显示高亮源码 |
+  | JSON | `json` `jsonc` `jsonl` `ndjson` `map` `webmanifest` | 可折叠树，每个值可单独复制；同样带 **源码** 切换。无法展开的文件会在高亮源码上方说明原因——语法错误、被截断、纯标量，或 `tsconfig.json` 这类文件里实际存在的 JSONC |
   | 源码 | 24 种语法：TypeScript/JavaScript、shell、Python、Ruby、Go、Rust、Java、C、C++、C#、Kotlin、Swift、PHP、YAML、TOML、INI、HTML、CSS、SCSS、Less、SQL、XML、Lua、MDX | 语法高亮 + 行号 + 复制按钮 |
   | 图片 | `png` `apng` `jpg` `jpeg` `jfif` `gif` `webp` `avif` `bmp` `ico` `svg` | 直接绘制，居中并在超出时缩放到窗格宽度。SVG 通过 `<img>` 绘制，其中的脚本不会执行 |
   | 其它 | 其余全部后缀 | 带行号、可复制的纯文本 |
@@ -154,9 +165,31 @@ Markdown 渲染、JSON 树、语法高亮代码块及其行号与复制控件、
 
 每个源文件都是一个独立模块，文件头注释说明了其中的取舍。
 
+### 重新生成演示
+
+README 内嵌一个 GIF、并链接同一段录屏的 MP4。GitHub 只有在视频文件自己的页面上
+才会播放提交进仓库的视频，所以内联动起来的是 GIF；而首帧与链接指向的是同一段
+完整画质的录像。
+
+```sh
+SRC="屏幕录制.mov"
+# 完整画质 MP4：取录制宽度的一半，相当于 2x 截图的清晰度。
+ffmpeg -i "$SRC" -vf scale=1680:-2:flags=lanczos -r 30 \
+  -c:v libx264 -preset slow -crf 24 -pix_fmt yuv420p -movflags +faststart -an media/demo.mp4
+# 内联 GIF：降帧率、缩调色板，体积主要就省在这里。
+ffmpeg -i "$SRC" -vf "fps=12,scale=1200:-2:flags=lanczos,split[a][b];\
+[a]palettegen=max_colors=128:stats_mode=diff[p];\
+[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle" -loop 0 media/demo.gif
+```
+
+`media/` 只用于文档：不在包的 `files` 清单里，因此永远不会进入 npm 包。
+
 ## 已知限制
 
 - **只预览，不编辑**：不写入、不保存、不做 diff。
+- **JSON 按严格语法解析**：带尾逗号的 `tsconfig.json` 属于 JSONC——TypeScript 接
+  受、`JSON.parse` 不接受。此时窗格会说明原因并显示高亮源码，而不是勉强猜出一棵
+  树；注释与尾逗号不会被静默剥除。
 - **Markdown 不解析工作区词汇**：Markdown 里的相对图片路径与文件提及保持原样——
   只有绝对 `http(s)` 图片会加载——因为解析它们需要阅读器为真实文件背书，而这个
   窗格不做这件事。
