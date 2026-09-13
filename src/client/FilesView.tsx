@@ -40,6 +40,7 @@ import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-fil
 import { canExportPdf, hasSourceToggle, previewFormatFor } from './format.ts'
 import type { PreviewFormat } from './format.ts'
 import type { FilesInjected } from './face.ts'
+import { relativeImageDestinations, resolveRelativePath } from './markdown-assets.ts'
 import type {
   FilesState, LevelState, PreviewContent, PreviewMode, PreviewState, PreviewText,
   createFilesStore,
@@ -356,6 +357,92 @@ function HtmlFrame({ html, title }: { html: string; title: string }): ReactNode 
 }
 
 /**
+ * The data URLs a rendered document already resolved, keyed by absolute path.
+ *
+ * Module scope rather than component state: switching tabs unmounts the pane, and
+ * a document whose images were read once should not read them again. The cap keeps
+ * the cache in the same spirit as the preview retention next door.
+ */
+const assetCache = new Map<string, string>()
+
+/** Ceiling on {@link assetCache} entries; the oldest read is evicted first. */
+const ASSET_CACHE_LIMIT = 64
+
+/**
+ * Remember one image's data URL, evicting the least recently loaded past the cap.
+ * @param path - absolute file path.
+ * @param dataUrl - the image, as a URL the renderer can draw.
+ */
+function cacheAsset(path: string, dataUrl: string): void {
+  assetCache.delete(path)
+  assetCache.set(path, dataUrl)
+  while (assetCache.size > ASSET_CACHE_LIMIT) {
+    const oldest = assetCache.keys().next().value
+    if (oldest === undefined) break
+    assetCache.delete(oldest)
+  }
+}
+
+/**
+ * A Markdown document with the images it references read from the workspace.
+ *
+ * The primitive resolves local destinations synchronously through `pathImages`,
+ * so the reads happen first and the document renders with whatever arrived — a
+ * reference with no answer stays inert alt text, exactly as it does for a
+ * destination this reader never resolves.
+ */
+function RenderedMarkdown({
+  text,
+  directory,
+  readImage,
+  labels,
+  proseRef,
+}: {
+  text: string
+  /** Absolute directory holding the document, which its destinations resolve against. */
+  directory: string
+  readImage: FilesInjected['readImage']
+  labels: MarkdownLabels
+  proseRef: MutableRefObject<HTMLDivElement | null>
+}): ReactNode {
+  const destinations = useMemo(() => relativeImageDestinations(text), [text])
+  const [assets, setAssets] = useState<Readonly<Record<string, string>>>({})
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const resolved: Record<string, string> = {}
+    const missing: { destination: string; path: string }[] = []
+    for (const destination of destinations) {
+      const path = resolveRelativePath(directory, destination)
+      const cached = assetCache.get(path)
+      if (cached === undefined) missing.push({ destination, path })
+      else resolved[destination] = cached
+    }
+    setAssets(resolved)
+    for (const { destination, path } of missing) {
+      void readImage(path, controller.signal).then((dataUrl) => {
+        if (dataUrl === undefined || controller.signal.aborted) return
+        cacheAsset(path, dataUrl)
+        setAssets(current => ({ ...current, [destination]: dataUrl }))
+      })
+    }
+    return () => { controller.abort() }
+  }, [destinations, directory, readImage])
+
+  // One identity per settled set: a fresh object each render would discard the
+  // primitive's parse memo.
+  const pathImages = useMemo(
+    () => ({ resolve: (value: string) => assets[value] }),
+    [assets],
+  )
+  return (
+    <div className="dsh-fe-prose" ref={proseRef} data-preview-format="markdown">
+      <MarkdownText text={text} labels={labels} pathImages={pathImages} />
+    </div>
+  )
+}
+
+/**
  * A Markdown file as a document, a JSON file as a collapsible tree, and an HTML
  * file as a page.
  *
@@ -367,14 +454,19 @@ function HtmlFrame({ html, title }: { html: string; title: string }): ReactNode 
 function FormattedBody({
   page,
   format,
+  directory,
   jsonDocument,
+  readImage,
   proseRef,
   t,
 }: {
   page: PreviewText
   format: PreviewFormat
+  /** Absolute directory holding the file, which its relative destinations resolve against. */
+  directory: string
   /** Parsed JSON for a `json` format, decided by the pane before it elected this body. */
   jsonDocument: object | undefined
+  readImage: FilesInjected['readImage']
   /** The rendered Markdown document, which the PDF export clones. */
   proseRef: MutableRefObject<HTMLDivElement | null>
   t: TranslateNS<'fileExplorer'>
@@ -415,9 +507,13 @@ function FormattedBody({
 
   if (format.kind === 'markdown') {
     return (
-      <div className="dsh-fe-prose" ref={proseRef} data-preview-format="markdown">
-        <MarkdownText text={page.text} labels={markdownLabels} />
-      </div>
+      <RenderedMarkdown
+        text={page.text}
+        directory={directory}
+        readImage={readImage}
+        labels={markdownLabels}
+        proseRef={proseRef}
+      />
     )
   }
   if (format.kind === 'html') {
@@ -594,6 +690,7 @@ function PreviewBody({
   jsonDocument,
   jsonFallback,
   wrap,
+  readImage,
   proseRef,
   t,
 }: {
@@ -605,6 +702,7 @@ function PreviewBody({
   /** The reader asked for the tree and the file does not parse; say so above the source. */
   jsonFallback: boolean
   wrap: boolean
+  readImage: FilesInjected['readImage']
   /** Handed to the rendered Markdown container, which the PDF export clones. */
   proseRef: MutableRefObject<HTMLDivElement | null>
   t: TranslateNS<'fileExplorer'>
@@ -647,9 +745,12 @@ function PreviewBody({
       {body === 'rendered'
         ? (
           <FormattedBody
+            key={path}
             page={page}
             format={format}
+            directory={pathParts(path).directory}
             jsonDocument={jsonDocument}
+            readImage={readImage}
             proseRef={proseRef}
             t={t}
           />
@@ -670,7 +771,7 @@ function PreviewBody({
  * @returns the two-pane explorer.
  */
 export function FilesView({
-  sessionId, useSessions, useStore, actions, list, read, t,
+  sessionId, useSessions, useStore, actions, list, read, readImage, t,
 }: FilesViewProps): ReactNode {
   const cwd = useSessions(sessions => sessions.byId[sessionId]?.cwd)
   const state = useStore(store => store)
@@ -976,6 +1077,7 @@ export function FilesView({
               jsonDocument={jsonDocument}
               jsonFallback={jsonFallback}
               wrap={wrap}
+              readImage={readImage}
               proseRef={proseRef}
               t={t}
             />

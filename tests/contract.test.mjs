@@ -266,6 +266,80 @@ test('only JSON a tree can walk parses for the tree view', async () => {
   assert.equal(parseJsonDocument('null'), undefined)
 })
 
+test('a document\'s relative image references are found without reading code as prose', async () => {
+  const registration = await loadClientFactory()
+  const { relativeImageDestinations, MAX_DOCUMENT_IMAGES } = registration.factory(stubRequire())
+
+  // The ordinary case, with a title, a duplicate, and a pointy-bracket
+  // destination (which is how a destination may hold a space).
+  const text = [
+    '![alt](images/g_lines.png)',
+    '![alt](images/g_lines.png)',
+    '![alt](images/a.png "a title")',
+    "![alt](images/b.png 'another title')",
+    '![alt](<images/with space.png>)',
+  ].join('\n')
+  assert.deepEqual(relativeImageDestinations(text), [
+    'images/g_lines.png',
+    'images/a.png',
+    'images/b.png',
+    'images/with space.png',
+  ])
+
+  // A bare destination may not contain a space, so this is not a reference and
+  // must not half-match into a read of `images/with`.
+  assert.deepEqual(relativeImageDestinations('![alt](images/with space.png "t")'), [])
+  // Nor is a bare destination with unbalanced parentheses.
+  assert.deepEqual(relativeImageDestinations('![alt](images/a(b.png)'), [])
+
+  // Destinations this reader does not answer for: remote, absolute, fragment,
+  // protocol-relative, and every other scheme.
+  const foreign = [
+    '![a](https://example.com/x.png)', '![a](http://example.com/x.png)',
+    '![a](data:image/png;base64,AAAA)', '![a](/etc/logo.png)',
+    '![a](#section)', '![a](//cdn.example.com/x.png)', '![a](mailto:x@example.com)',
+    '![a](C:\\\\tmp\\\\x.png)', '![a](   )',
+  ].join('\n')
+  assert.deepEqual(relativeImageDestinations(foreign), [])
+
+  // A document *about* Markdown must not fetch what its fences and inline spans
+  // name. An indented code block is still scanned — telling one from a list
+  // continuation needs a real parser — and that costs one read which resolves to
+  // nothing, leaving the reference inert as any unresolved one is.
+  const teaching = [
+    '# Images',
+    '',
+    'Write ![alt](images/real.png) to embed a file.',
+    '',
+    '```markdown',
+    '![alt](images/in-a-fence.png)',
+    '```',
+    '',
+    '    ![alt](images/indented.png)',
+    '',
+    'Inline `![alt](images/in-code.png)` stays literal.',
+  ].join('\n')
+  assert.deepEqual(relativeImageDestinations(teaching), ['images/real.png', 'images/indented.png'])
+
+  // One document cannot ask for an unbounded number of reads.
+  const many = Array.from({ length: MAX_DOCUMENT_IMAGES + 5 }, (_v, index) => `![a](img${index}.png)`).join('\n')
+  assert.equal(relativeImageDestinations(many).length, MAX_DOCUMENT_IMAGES)
+})
+
+test('a relative destination resolves against the document directory', async () => {
+  const registration = await loadClientFactory()
+  const { resolveRelativePath } = registration.factory(stubRequire())
+
+  assert.equal(resolveRelativePath('/w/proj/', 'images/g_lines.png'), '/w/proj/images/g_lines.png')
+  assert.equal(resolveRelativePath('/w/proj', './images/a.png'), '/w/proj/images/a.png')
+  assert.equal(resolveRelativePath('/w/proj/docs/', '../images/a.png'), '/w/proj/images/a.png')
+  assert.equal(resolveRelativePath('/w/proj/', 'a%20b.png'), '/w/proj/a b.png')
+  // A malformed escape is kept as written rather than losing the reference.
+  assert.equal(resolveRelativePath('/w/proj/', 'a%zz.png'), '/w/proj/a%zz.png')
+  // Windows keeps its own separator and its drive segment.
+  assert.equal(resolveRelativePath('C:\\w\\proj\\', 'images\\a.png'), 'C:\\w\\proj\\images\\a.png')
+})
+
 test('tab labels disambiguate only the basenames that clash', async () => {
   const registration = await loadClientFactory()
   const { tabLabels } = registration.factory(stubRequire())

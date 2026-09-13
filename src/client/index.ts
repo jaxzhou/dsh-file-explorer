@@ -36,6 +36,9 @@ import { installStyles } from './styles.ts'
 
 export { parseJsonDocument, previewLines, tabLabels } from './FilesView.tsx'
 export { canExportPdf, extensionOf, hasSourceToggle, previewFormatFor } from './format.ts'
+export {
+  MAX_ASSET_BYTES, MAX_DOCUMENT_IMAGES, relativeImageDestinations, resolveRelativePath,
+} from './markdown-assets.ts'
 export type { PreviewFormat, PreviewFormatKind } from './format.ts'
 export type { FileExplorerKey } from './locales.ts'
 export { RETAINED_PREVIEWS } from './store.ts'

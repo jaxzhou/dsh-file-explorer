@@ -44,7 +44,7 @@ The right pane picks each tab's body from the file:
 
 | Category | Preview |
 |---|---|
-| **Markdown** | Rendered GFM — headings, tables, task lists, quotes, math, footnotes, highlighted code fences — with a **Source** toggle, and **Export PDF** |
+| **Markdown** | Rendered GFM — headings, tables, task lists, quotes, math, footnotes, images referenced beside the file, highlighted code fences — with a **Source** toggle, and **Export PDF** |
 | **HTML** | Drawn as a page in a sandboxed frame: the file's own CSS applies, and its scripts run in an opaque origin that cannot reach this application. With a **Source** toggle, and **Export PDF** |
 | **JSON** | A collapsible tree with per-value copy, and the same toggle |
 | **Source code** | Syntax highlighting, line numbers, and a copy button for 24 grammars: TypeScript/JavaScript, shell, Python, Ruby, Go, Rust, Java, C, C++, C#, Kotlin, Swift, PHP, YAML, TOML, INI, HTML, CSS, SCSS, Less, SQL, XML, Lua, MDX |
@@ -140,8 +140,11 @@ restart the profile.
   an older tab stays open and reads again when you return to it.
 - **One root.** The tree is rooted at the session's working directory, and the
   Host refuses directory listings outside the workspace root.
-- **Markdown has no workspace vocabulary.** Relative image paths and file
-  mentions stay inert; only absolute `http(s)` images load.
+- **Markdown pulls in the images beside it.** A destination relative to the document
+  is read through the same workspace reader the file itself came from — up to 24
+  images per document and 8 MiB each. A file mention in inline code, a remote URL,
+  and an absolute path are left to the renderer's own rules: the first stays inert,
+  the second loads directly, and the third is not fetched.
 - **HTML previews do not resolve relative assets.** A page drawn from a Blob
   document has no base to resolve its own `style.css` or images against, so only
   absolute URLs load there too. An export prints the page as it renders without

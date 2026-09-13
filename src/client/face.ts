@@ -19,6 +19,7 @@ import type { BoundActions } from '@deepseek-ai/dsh-client-store'
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { previewFormatFor } from './format.ts'
+import { MAX_ASSET_BYTES } from './markdown-assets.ts'
 import type { PreviewText, createFilesStore } from './store.ts'
 
 /** The slice of the Client Remote face this plugin calls. */
@@ -44,6 +45,15 @@ export interface FilesInjected {
    * @param path - absolute file path of an open tab.
    */
   readonly read: (path: string) => void
+  /**
+   * Read one image for a document that references it, as a URL the renderer can
+   * draw. Answers nothing for a path that is not an image, for one the host
+   * cannot read, or for one past {@link MAX_ASSET_BYTES} — an unresolved
+   * reference stays inert, which is what the primitive already does with one.
+   * @param path - absolute file path.
+   * @param signal - the requesting document's lifetime; aborting abandons the read.
+   */
+  readonly readImage: (path: string, signal: AbortSignal) => Promise<string | undefined>
 }
 
 /**
@@ -129,6 +139,19 @@ export function filesFace(
             }
           })
         })
+    },
+    readImage(path, request) {
+      // The plugin's own lifetime ends every read with it, even one a document is
+      // still waiting for.
+      if (signal.aborted || request.aborted) return Promise.resolve(undefined)
+      const format = previewFormatFor(path)
+      if (format.kind !== 'image') return Promise.resolve(undefined)
+      return remote.workspaceFiles.readAll(sessionId, path, request).then((result) => {
+        if (!result.ok || request.aborted) return undefined
+        const { bytes, data } = result.value
+        if (bytes !== undefined && bytes > MAX_ASSET_BYTES) return undefined
+        return `data:${format.mediaType};base64,${data}`
+      })
     },
   }
 }
