@@ -20,11 +20,14 @@ dsh --profile web
 
 ## Demo
 
-[![The Files tab beside Chat and Trajectory: a workspace tree on the left, and
-on the right a preview that highlights source, renders Markdown and JSON, and
-offers a Rendered/Source toggle](media/demo.gif)](media/demo.mp4)
+[![The Files tab beside Chat and Trajectory: a workspace tree on the left, and a
+rendered Markdown document on the right whose toolbar carries Copy, Source and
+Export PDF](media/demo.gif)](media/demo.mp4)
 
-*30 seconds — click for the full-quality MP4.*
+*15 seconds — click for the full-quality MP4.* A primary-school maths workspace: a
+lesson document rendered with its tables, the **Source** toggle showing the
+Markdown behind it, a second document open beside it in its own tab, and **Export
+PDF**, which hands the page to the browser's print dialog.
 
 ## What you get
 
