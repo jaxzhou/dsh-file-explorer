@@ -171,10 +171,16 @@ ffmpeg -i "$SRC" -vf "fps=12,scale=1200:-2:flags=lanczos,split[a][b];\
 ## Releasing
 
 ```sh
-npm version patch            # 0.1.0 -> 0.1.1: commits, tags
+npm version patch            # writes the manifest AND the tag together
 npm publish                  # prepublishOnly re-runs npm run check
 git push --follow-tags
 ```
+
+Never tag by hand. `npm version` is what keeps a tag from naming a version the
+manifest does not carry: this repository has already shipped a `v0.1.4` tag on a
+commit whose `package.json` still said `0.1.3`, and had to withdraw it. A tag
+should mark a version that exists in the manifest — and, once published, in the
+registry.
 
 Publishing needs 2FA or a granular access token with **Bypass 2FA**; the token
 stored by a plain `npm login` cannot publish. `publishConfig` already pins the
