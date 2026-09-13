@@ -91,6 +91,25 @@ mid-grey (`#61666b`) in dark mode. The wash used instead is 4% ink in light and
 8% in dark, which is also light enough that a hovered control inside the row
 stays visible. If the theme gains a real toolbar-surface token, use it there.
 
+### PDF export prints, it does not rasterise
+
+There is no PDF library in the bundle. Export opens the browser's own print dialog
+on a document built for the printer, because that dialog already offers "Save as
+PDF" and the engine keeps text as text. Two details make it work:
+
+- **The frame outlives the call.** A browser may return from `print()` before its
+  preview has laid the document out, so the print frame removes itself on
+  `afterprint`, not on return; a frame whose `afterprint` never arrived is cleared
+  by the next export.
+- **The print frame is sized like a page** (794×1123, off screen). The print engine
+  lays the document out from the viewport it finds, so a zero-width frame prints a
+  zero-width column.
+
+Markdown prints from the live rendered node, so a page carries exactly what the
+reader sees. HTML prints from its own document with scripts, `on*` handlers and
+`javascript:` URLs stripped — that is what lets the frame be an ordinary
+same-origin one, which in turn is what lets the component drive the print.
+
 ### A `link:` install breaks when the package is renamed
 
 `dsh plugin --profile <p> add /path/to/checkout` records a dependency keyed by the

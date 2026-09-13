@@ -392,6 +392,30 @@ const CSS = `
   opacity: 0.6;
 }
 
+/* An HTML file is drawn by the browser, in a frame that fills the pane. The
+   white canvas is the page's own, not this pane's: an unstyled document still
+   reads as a document rather than as a hole in the app.
+
+   The host takes its height from the scrollport's content box, so the frame ends
+   exactly where the pane's bottom inset begins and the scrollport itself never
+   scrolls — a page scrolls inside its own frame. */
+.dsh-fe-html {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.dsh-fe-html-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+
 /* Rendered Markdown: prose lays out in normal white space, with the pane's
    insets and no monospace inheritance from the source view. */
 .dsh-fe-prose {

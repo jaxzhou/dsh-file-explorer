@@ -170,7 +170,7 @@ test('the stylesheet installer writes one owned style tag', async () => {
     for (const hook of [
       '.dsh-fe-source', '.dsh-fe-prose', '.dsh-fe-json', '.dsh-fe-image',
       '.dsh-fe-tabs', '.dsh-fe-tab-label', '.dsh-fe-tab-close', '.dsh-fe-open-dot',
-      '.dsh-fe-lang',
+      '.dsh-fe-lang', '.dsh-fe-html-frame',
     ]) {
       assert.ok(css.includes(hook), `stylesheet lost ${hook}`)
     }
@@ -210,7 +210,7 @@ test('a page splits into the lines its own count promises', async () => {
 
 test('a file name decides its preview format', async () => {
   const registration = await loadClientFactory()
-  const { previewFormatFor, hasSourceToggle, extensionOf } = registration.factory(stubRequire())
+  const { previewFormatFor, hasSourceToggle, canExportPdf, extensionOf } = registration.factory(stubRequire())
   const formatOf = path => {
     const format = previewFormatFor(path)
     return { kind: format.kind, lang: format.lang, mediaType: format.mediaType }
@@ -236,11 +236,21 @@ test('a file name decides its preview format', async () => {
   assert.deepEqual(formatOf('/a/notes.txt'), { kind: 'text', lang: undefined, mediaType: undefined })
   // MDX stays on the source side: its JSX would render as prose.
   assert.deepEqual(formatOf('/a/page.mdx'), { kind: 'code', lang: 'mdx', mediaType: undefined })
+  assert.deepEqual(formatOf('/a/index.html'), { kind: 'html', lang: 'html', mediaType: undefined })
 
   assert.equal(hasSourceToggle(previewFormatFor('/a/README.md')), true)
   assert.equal(hasSourceToggle(previewFormatFor('/a/package.json')), true)
+  assert.equal(hasSourceToggle(previewFormatFor('/a/index.html')), true)
   assert.equal(hasSourceToggle(previewFormatFor('/a/main.ts')), false)
   assert.equal(hasSourceToggle(previewFormatFor('/a/logo.png')), false)
+
+  // Only the formats whose rendered body is a document can be exported as a PDF.
+  for (const file of ['/a/README.md', '/a/index.html']) {
+    assert.equal(canExportPdf(previewFormatFor(file)), true, file)
+  }
+  for (const file of ['/a/package.json', '/a/main.ts', '/a/notes.txt', '/a/shot.png']) {
+    assert.equal(canExportPdf(previewFormatFor(file)), false, file)
+  }
 })
 
 test('only JSON a tree can walk parses for the tree view', async () => {

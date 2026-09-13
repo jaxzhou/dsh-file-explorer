@@ -41,7 +41,8 @@ The right pane picks each tab's body from the file:
 
 | Category | Preview |
 |---|---|
-| **Markdown** | Rendered GFM — headings, tables, task lists, quotes, math, footnotes, highlighted code fences — with a **Source** toggle |
+| **Markdown** | Rendered GFM — headings, tables, task lists, quotes, math, footnotes, highlighted code fences — with a **Source** toggle, and **Export PDF** |
+| **HTML** | Drawn as a page in a sandboxed frame: the file's own CSS applies, and its scripts run in an opaque origin that cannot reach this application. With a **Source** toggle, and **Export PDF** |
 | **JSON** | A collapsible tree with per-value copy, and the same toggle |
 | **Source code** | Syntax highlighting, line numbers, and a copy button for 24 grammars: TypeScript/JavaScript, shell, Python, Ruby, Go, Rust, Java, C, C++, C#, Kotlin, Swift, PHP, YAML, TOML, INI, HTML, CSS, SCSS, Less, SQL, XML, Lua, MDX |
 | **Images** | PNG, JPEG, GIF, WebP, AVIF, BMP, ICO and SVG, drawn to the pane. An SVG goes through `<img>`, so its scripts never run |
@@ -50,7 +51,10 @@ The right pane picks each tab's body from the file:
 Text previews wrap at their spaces and keep every word whole; an image reads its
 complete bytes. Every text body carries a **Copy** control in the pane's toolbar,
 which copies the file's own text — a rendered Markdown document copies its
-Markdown source.
+Markdown source. A rendered Markdown or HTML file also carries **Export PDF**,
+which hands the page to the browser's print dialog: every browser offers "Save as
+PDF" there, and its own layout engine keeps the text as text rather than
+rasterising the page the way a canvas-based PDF library would.
 
 ## Requirements
 
@@ -112,6 +116,10 @@ restart the profile.
   state lives in memory and is discarded with the session.
 - **Inert Host half.** The package's Node side registers no service, tool, prompt
   section, or event.
+- **HTML runs sandboxed.** A previewed page's scripts execute in an opaque origin,
+  which cannot read this application's DOM, storage, or session; an exported page
+  is printed with its scripts removed. An SVG draws through `<img>`, so its scripts
+  never run at all.
 
 ## Known limitations
 
@@ -131,6 +139,10 @@ restart the profile.
   Host refuses directory listings outside the workspace root.
 - **Markdown has no workspace vocabulary.** Relative image paths and file
   mentions stay inert; only absolute `http(s)` images load.
+- **HTML previews do not resolve relative assets.** A page drawn from a Blob
+  document has no base to resolve its own `style.css` or images against, so only
+  absolute URLs load there too. An export prints the page as it renders without
+  its scripts, which a static PDF has no use for anyway.
 
 ## Contributing
 

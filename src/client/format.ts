@@ -13,7 +13,7 @@
  */
 
 /** The display a file's contents get. */
-export type PreviewFormatKind = 'markdown' | 'json' | 'code' | 'image' | 'text'
+export type PreviewFormatKind = 'markdown' | 'html' | 'json' | 'code' | 'image' | 'text'
 
 /** One file's preview format. */
 export interface PreviewFormat {
@@ -107,9 +107,10 @@ export function previewFormatFor(path: string): PreviewFormat {
   const lang = extension === undefined ? undefined : GRAMMAR_BY_EXTENSION.get(extension)
   if (lang === undefined) return { kind: 'text', lang: undefined, mediaType: undefined }
   if (lang === 'json') return { kind: 'json', lang, mediaType: undefined }
-  // Markdown gets a rendered body and a source body; MDX stays on the source
-  // side, because its JSX would render as prose.
+  // Markdown and HTML each get a rendered body and a source body; MDX stays on
+  // the source side, because its JSX would render as prose.
   if (lang === 'markdown') return { kind: 'markdown', lang, mediaType: undefined }
+  if (lang === 'html') return { kind: 'html', lang, mediaType: undefined }
   return { kind: 'code', lang, mediaType: undefined }
 }
 
@@ -119,5 +120,18 @@ export function previewFormatFor(path: string): PreviewFormat {
  * @returns whether both bodies exist.
  */
 export function hasSourceToggle(format: PreviewFormat): boolean {
-  return format.kind === 'markdown' || format.kind === 'json'
+  return format.kind === 'markdown' || format.kind === 'html' || format.kind === 'json'
+}
+
+/**
+ * Whether the rendered body of a format can be exported as a PDF.
+ *
+ * Only the two formats whose rendered body is a *document*: a JSON tree and a
+ * source listing have no page to print, and an image or plain text is already
+ * what it is.
+ * @param format - the file's format.
+ * @returns whether the export control applies.
+ */
+export function canExportPdf(format: PreviewFormat): boolean {
+  return format.kind === 'markdown' || format.kind === 'html'
 }

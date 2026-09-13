@@ -35,7 +35,7 @@ import { createFilesStore } from './store.ts'
 import { installStyles } from './styles.ts'
 
 export { parseJsonDocument, previewLines, tabLabels } from './FilesView.tsx'
-export { extensionOf, hasSourceToggle, previewFormatFor } from './format.ts'
+export { canExportPdf, extensionOf, hasSourceToggle, previewFormatFor } from './format.ts'
 export type { PreviewFormat, PreviewFormatKind } from './format.ts'
 export type { FileExplorerKey } from './locales.ts'
 export { RETAINED_PREVIEWS } from './store.ts'
