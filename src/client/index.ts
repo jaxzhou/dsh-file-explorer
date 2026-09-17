@@ -39,6 +39,15 @@ export { canExportPdf, extensionOf, hasSourceToggle, previewFormatFor } from './
 export {
   MAX_ASSET_BYTES, MAX_DOCUMENT_IMAGES, relativeImageDestinations, resolveRelativePath,
 } from './markdown-assets.ts'
+// The export writers are pure byte producers, so they are reachable from outside
+// the plugin: the contract tests parse what they write, which is the only way to
+// check a file format without opening the file in an application.
+export { bytesOfDataUrl, pdfFromPages, A4_HEIGHT_PT, A4_WIDTH_PT } from './export/pdf.ts'
+export type { PdfPage } from './export/pdf.ts'
+export { crc32, zip } from './export/zip.ts'
+export type { ZipPart } from './export/zip.ts'
+export { docxFromBlocks } from './export/docx.ts'
+export type { Block, InlineRun } from './export/model.ts'
 export type { PreviewFormat, PreviewFormatKind } from './format.ts'
 export type { FileExplorerKey } from './locales.ts'
 export { RETAINED_PREVIEWS } from './store.ts'

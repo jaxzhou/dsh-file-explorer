@@ -54,6 +54,13 @@ export interface FilesInjected {
    * @param signal - the requesting document's lifetime; aborting abandons the read.
    */
   readonly readImage: (path: string, signal: AbortSignal) => Promise<string | undefined>
+  /**
+   * Read one text asset an export needs to stand alone, such as a stylesheet a
+   * document links to.
+   * @param path - absolute file path.
+   * @param signal - the requesting document's lifetime; aborting abandons the read.
+   */
+  readonly readText: (path: string, signal: AbortSignal) => Promise<string | undefined>
 }
 
 /**
@@ -151,6 +158,18 @@ export function filesFace(
         const { bytes, data } = result.value
         if (bytes !== undefined && bytes > MAX_ASSET_BYTES) return undefined
         return `data:${format.mediaType};base64,${data}`
+      })
+    },
+    readText(path, request) {
+      if (signal.aborted || request.aborted) return Promise.resolve(undefined)
+      return remote.workspaceFiles.readAll(sessionId, path, request).then((result) => {
+        if (!result.ok || request.aborted) return undefined
+        const { bytes, data } = result.value
+        if (bytes !== undefined && bytes > MAX_ASSET_BYTES) return undefined
+        const binary = atob(data)
+        const raw = new Uint8Array(binary.length)
+        for (let index = 0; index < binary.length; index++) raw[index] = binary.charCodeAt(index)
+        return new TextDecoder().decode(raw)
       })
     },
   }

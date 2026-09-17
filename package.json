@@ -1,6 +1,6 @@
 {
   "name": "@jaxzhou/dsh-file-explorer",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "DeepSeek Harness plugin: a workspace file browser with a per-format preview (rendered Markdown, a JSON tree, 24 syntax grammars, images), shown as a Conversation View tab beside Chat and Trajectory",
   "type": "module",
   "main": "./lib/index.js",
@@ -92,6 +92,7 @@
     "@deepseek-ai/dsh-client-ui-slots": "0.1.5-rc.2",
     "@types/react": "~18.3.1",
     "esbuild": "^0.25.0",
+    "html2canvas": "^1.4.1",
     "react": "^18.3.1",
     "typescript": "~5.7.2"
   }

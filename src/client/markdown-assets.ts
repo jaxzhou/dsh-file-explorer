@@ -45,7 +45,7 @@ const INLINE_CODE = /`[^`\n]*`/g
  * @param destination - the destination as the author wrote it.
  * @returns whether it names a file beside the document.
  */
-function isRelativeDestination(destination: string): boolean {
+export function isRelativeDestination(destination: string): boolean {
   const value = destination.trim()
   if (value === '' || value.startsWith('#') || value.startsWith('/') || value.startsWith('//')) {
     return false

@@ -91,24 +91,40 @@ mid-grey (`#61666b`) in dark mode. The wash used instead is 4% ink in light and
 8% in dark, which is also light enough that a hovered control inside the row
 stays visible. If the theme gains a real toolbar-surface token, use it there.
 
-### PDF export prints, it does not rasterise
+### The exports write the files themselves
 
-There is no PDF library in the bundle. Export opens the browser's own print dialog
-on a document built for the printer, because that dialog already offers "Save as
-PDF" and the engine keeps text as text. Two details make it work:
+There is no print dialog in this plugin: an export builds a file and downloads it.
+That splits into three decisions worth knowing before changing any of it.
 
-- **The frame outlives the call.** A browser may return from `print()` before its
-  preview has laid the document out, so the print frame removes itself on
-  `afterprint`, not on return; a frame whose `afterprint` never arrived is cleared
-  by the next export.
-- **The print frame is sized like a page** (794×1123, off screen). The print engine
-  lays the document out from the viewport it finds, so a zero-width frame prints a
-  zero-width column.
+**The PDF is rasterised, and that is not laziness.** A text-mode PDF needs a font,
+and these documents are usually Chinese — the standard 14 PDF fonts carry no CJK
+glyphs, so the text would have to embed a CJK font of several megabytes in a plugin
+that previews files. `html2canvas` draws the DOM instead, one pass for the whole
+document (it walks the tree per call, so a call per page would lay out a long
+document once per page), and `export/pdf.ts` slices that canvas into A4 pages and
+writes the container: catalog, page tree, and per page a page dictionary, a content
+stream, and one DCTDecode image. The container is hand-written because a PDF library
+for "pages of JPEG" is hundreds of kilobytes to do what a hundred lines do — and it
+is verified, not assumed: the tests parse the xref table and re-read every object
+offset, and a release check renders the file with the platform PDF engine.
 
-Markdown prints from the live rendered node, so a page carries exactly what the
-reader sees. HTML prints from its own document with scripts, `on*` handlers and
-`javascript:` URLs stripped — that is what lets the frame be an ordinary
-same-origin one, which in turn is what lets the component drive the print.
+**The `.docx` is real OOXML**, written by `export/zip.ts` (stored entries, CRC-32)
+and `export/docx.ts` (paragraphs, runs, tables, and inline pictures). Word needs no
+font embedding, so the text stays text — which is the reason to offer Word beside a
+raster PDF at all. Formatting is applied directly on runs and paragraphs; there is
+no `styles.xml`, so there is no style-name to get wrong.
+
+**`html2canvas` is the bundle's one dependency**, at ~194 KiB minified, and it is
+imported dynamically so its module body does not run at plugin load. Two build
+consequences: the client bundle is minified now (an unminified inline would be
+1.4 MB), and `trimClientMap` drops third-party sources from the shipped source map,
+which otherwise grows from 93 KiB to 831 KiB.
+
+An HTML export is made to stand alone first (`standaloneHtml`): its relative images
+and stylesheets are read through the workspace reader and inlined, because a blob
+document has no base to resolve them against — which is also why the *preview*
+still shows those images missing, and why an export can carry pictures the preview
+does not.
 
 ### A `link:` install breaks when the package is renamed
 

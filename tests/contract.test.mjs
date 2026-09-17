@@ -537,3 +537,178 @@ test('a failed listing and a failed read report the Remote failure', async () =>
   await settled()
   assert.deepEqual(writes[3], ['previewFailed', '/tmp/a.bin', failure])
 })
+
+/** Read a stored-entry zip, the way a reader would: through its central directory. */
+function readZip(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  // End of central directory: scan back for its signature (no comment is written).
+  let eocd = bytes.length - 22
+  while (eocd >= 0 && view.getUint32(eocd, true) !== 0x06054b50) eocd--
+  assert.ok(eocd >= 0, 'no end of central directory record')
+  const count = view.getUint16(eocd + 10, true)
+  let at = view.getUint32(eocd + 16, true)
+  const entries = []
+  for (let index = 0; index < count; index++) {
+    assert.equal(view.getUint32(at, true), 0x02014b50, 'central directory header signature')
+    const crc = view.getUint32(at + 16, true)
+    const size = view.getUint32(at + 24, true)
+    const nameLength = view.getUint16(at + 28, true)
+    const offset = view.getUint32(at + 42, true)
+    const name = new TextDecoder().decode(bytes.subarray(at + 46, at + 46 + nameLength))
+    // The local header must agree with the directory, and the bytes must be there.
+    assert.equal(view.getUint32(offset, true), 0x04034b50, `local header for ${name}`)
+    const localNameLength = view.getUint16(offset + 26, true)
+    const localExtra = view.getUint16(offset + 28, true)
+    const start = offset + 30 + localNameLength + localExtra
+    const data = bytes.subarray(start, start + size)
+    assert.equal(data.length, size, `stored length for ${name}`)
+    entries.push({ name, crc, size, data })
+    at += 46 + nameLength + view.getUint16(at + 30, true) + view.getUint16(at + 32, true)
+  }
+  return entries
+}
+
+test('the zip writer writes an archive a reader can walk', async () => {
+  const registration = await loadClientFactory()
+  const { zip, crc32 } = registration.factory(stubRequire())
+
+  // The standard check value for CRC-32, so the table is verifiably the right one.
+  assert.equal(crc32(new TextEncoder().encode('123456789')), 0xcbf43926)
+
+  const parts = [
+    { name: 'a.xml', data: new TextEncoder().encode('<a/>') },
+    { name: 'word/media/image1.png', data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]) },
+    { name: 'empty', data: new Uint8Array(0) },
+  ]
+  const entries = readZip(zip(parts))
+  assert.deepEqual(entries.map(entry => entry.name), ['a.xml', 'word/media/image1.png', 'empty'])
+  for (const [index, entry] of entries.entries()) {
+    const source = parts[index].data
+    assert.equal(entry.size, source.length, entry.name)
+    assert.deepEqual([...entry.data], [...source], `${entry.name} bytes`)
+    // The recorded checksum is the part's own, which is what a reader verifies.
+    assert.equal(entry.crc, crc32(source), `${entry.name} crc`)
+  }
+})
+
+test('the PDF writer writes pages whose objects the table points at', async () => {
+  const registration = await loadClientFactory()
+  const { pdfFromPages } = registration.factory(stubRequire())
+
+  const page = (byte) => ({
+    // A tiny but well-formed JPEG head: the writer must not touch these bytes.
+    jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xe0, byte, byte, byte, 0xff, 0xd9]),
+    width: 1240,
+    height: 1754,
+  })
+  const bytes = pdfFromPages([page(1), page(2)])
+  const text = new TextDecoder('latin1').decode(bytes)
+
+  assert.ok(text.startsWith('%PDF-1.4'), 'header')
+  assert.ok(text.endsWith('%%EOF\n'), 'trailer')
+  assert.match(text, /\/Type \/Catalog/)
+  assert.match(text, /\/Count 2\b/)
+  // Each page is A4 wide with its image's own aspect ratio, and points at its own
+  // content stream and image: page objects are 3 and 6, contents 4 and 7, images 5 and 8.
+  for (const pageNumber of [3, 6]) {
+    assert.ok(text.includes('/Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 '), `page ${pageNumber} box`)
+    assert.ok(text.includes(`/Contents ${pageNumber + 1} 0 R`), `page ${pageNumber} content`)
+    assert.ok(text.includes(`/XObject << /Im0 ${pageNumber + 2} 0 R >>`), `page ${pageNumber} image`)
+  }
+  // The box follows the image's aspect ratio at A4's width, rather than padding a
+  // short page out to the paper's height.
+  const fitted = (595.28 * (1754 / 1240)).toFixed(2)
+  assert.ok(text.includes(`/MediaBox [0 0 595.28 ${fitted}]`), `fitted page box (${fitted})`)
+
+  // Every object the cross-reference table names must start where it says.
+  const startxref = Number(text.slice(text.lastIndexOf('startxref') + 9).trim().split('\n')[0])
+  assert.equal(text.slice(startxref, startxref + 4), 'xref')
+  const table = text.slice(startxref).split('\n')
+  const declared = Number(table[1].split(' ')[1])
+  assert.equal(declared, 9, 'one catalog, one page tree, three objects per page, plus the free entry')
+  for (let number = 1; number < declared; number++) {
+    const offset = Number(table[number + 2].slice(0, 10))
+    assert.ok(text.startsWith(`${number} 0 obj`, offset), `object ${number} at ${offset}`)
+  }
+
+  // The embedded image is byte-identical: a PDF carries a JPEG through untouched.
+  let from = 0
+  for (const marker of [1, 2]) {
+    const header = text.indexOf('/Length 9 >>', from)
+    const start = text.indexOf('stream\n', header) + 'stream\n'.length
+    from = start
+    assert.deepEqual([...bytes.subarray(start, start + 9)], [...page(marker).jpeg], `jpeg ${marker}`)
+  }
+})
+
+test('the Word writer writes an OOXML package with its parts related', async () => {
+  const registration = await loadClientFactory()
+  const { docxFromBlocks } = registration.factory(stubRequire())
+
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9, 9])
+  const dataUrl = `data:image/png;base64,${Buffer.from(png).toString('base64')}`
+  const bytes = docxFromBlocks([
+    { kind: 'heading', level: 1, runs: [{ text: '标题 & 内容' }] },
+    { kind: 'paragraph', runs: [{ text: 'plain ', }, { text: 'bold', bold: true }, { text: 'code', code: true }] },
+    { kind: 'paragraph', runs: [{ text: 'first line\nsecond line' }] },
+    { kind: 'code', text: 'a = 1\nb = 2' },
+    { kind: 'list', ordered: true, depth: 0, runs: [{ text: 'first' }] },
+    { kind: 'list', ordered: true, depth: 0, runs: [{ text: 'second' }] },
+    { kind: 'list', ordered: false, depth: 1, runs: [{ text: 'bullet' }] },
+    { kind: 'heading', level: 2, runs: [{ text: 'break' }] },
+    { kind: 'list', ordered: true, depth: 0, runs: [{ text: 'restarts' }] },
+    { kind: 'table', rows: [{ cells: [{ runs: [{ text: 'h1' }] }, { runs: [{ text: 'h2' }] }] }, { cells: [{ runs: [{ text: 'v1' }] }, { runs: [{ text: 'v2' }] }] }] },
+    { kind: 'rule' },
+    { kind: 'image', src: dataUrl, alt: '图', width: 400, height: 200 },
+    { kind: 'image', src: 'https://example.com/x.png', alt: 'remote' },
+  ], 'lesson.md')
+
+  const parts = readZip(bytes).map(entry => ({
+    name: entry.name,
+    text: new TextDecoder().decode(entry.data),
+    data: entry.data,
+  }))
+  const names = parts.map(part => part.name)
+  for (const required of ['[Content_Types].xml', '_rels/.rels', 'word/document.xml', 'docProps/core.xml']) {
+    assert.ok(names.includes(required), `missing ${required}`)
+  }
+  // The document must be well-formed XML, with the text escaped and the structure kept.
+  const document = parts.find(part => part.name === 'word/document.xml').text
+  assert.match(document, /^<\?xml version="1\.0"/)
+  assert.ok(document.includes('<w:body>') && document.includes('</w:body>'))
+  assert.ok(document.includes('标题 &amp; 内容'), 'text escaped, CJK intact')
+  assert.ok(document.includes('<w:b/>'), 'bold run')
+  // A newline inside a run is a line break; a code block is one shaded paragraph
+  // per line, so its shading follows every line instead of one block of text.
+  assert.ok(document.includes('<w:br/>'), 'line break inside a run')
+  const shaded = document.match(/<w:shd w:val="clear" w:fill="F2F3F5"\/>(?:(?!<\/w:p>).)*<\/w:p>/g) ?? []
+  assert.equal(shaded.length, 2, 'one shaded paragraph per code line')
+  assert.ok(shaded[0].includes('a = 1') && shaded[1].includes('b = 2'))
+  assert.ok(document.includes('<w:tbl>') && document.includes('<w:tc>'), 'table')
+  assert.ok(document.includes('<w:drawing>') && document.includes('r:embed="rIdImage1"'), 'image')
+  assert.ok(document.includes('<w:pBdr>'), 'horizontal rule')
+  // Ordered items are numbered and an unordered one is not; a new list restarts.
+  // A paragraph's text is the concatenation of its runs, which is how a reader
+  // sees a marker typed as one run and the item as the next.
+  const paragraphText = [...document.matchAll(/<w:p>(?:<w:pPr>[\s\S]*?<\/w:pPr>)?([\s\S]*?)<\/w:p>/g)]
+    .map(match => [...match[1].matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)].map(run => run[1]).join(''))
+  assert.ok(paragraphText.includes('1.\u00a0first'), 'first ordered marker')
+  assert.ok(paragraphText.includes('2.\u00a0second'), 'second ordered marker')
+  assert.ok(paragraphText.includes('\u2022\u00a0bullet'), 'bullet marker')
+  assert.ok(paragraphText.includes('1.\u00a0restarts'), 'numbering restarts after another block')
+  const core = parts.find(part => part.name === 'docProps/core.xml').text
+  assert.ok(core.includes('<dc:title>lesson.md</dc:title>'), 'title metadata')
+  // Every part needs a declared content type, including the properties part.
+  assert.ok(parts.find(part => part.name === '[Content_Types].xml').text
+    .includes('PartName="/docProps/core.xml"'), 'core.xml content type')
+
+  // Media: only the image that could be read is embedded, byte for byte.
+  const media = parts.filter(part => part.name.startsWith('word/media/'))
+  assert.equal(media.length, 1, 'one embedded image')
+  assert.deepEqual([...media[0].data], [...png])
+  assert.ok(parts.find(part => part.name === '[Content_Types].xml').text.includes('image/png'))
+  const rels = parts.find(part => part.name === 'word/_rels/document.xml.rels').text
+  assert.ok(rels.includes('Target="media/image1.png"'), 'relationship target')
+  // The unreadable remote image keeps its place as alt text instead.
+  assert.ok(document.includes('remote'))
+})

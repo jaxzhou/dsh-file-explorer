@@ -76,6 +76,10 @@ async function buildClient() {
     target: 'es2022',
     jsx: 'automatic',
     sourcemap: true,
+    // Minified: the export inlines html2canvas (~194 KiB minified), and an
+    // unminified inline of it would dwarf the plugin's own code. The source map
+    // beside the artifact is what a stack frame is read with.
+    minify: true,
     external: PLATFORM_MODULES,
     define: DEFINES,
     logLevel: 'info',
@@ -85,6 +89,24 @@ async function buildClient() {
     },
     footer: { js: 'return module.exports; } });' },
   })
+}
+
+/**
+ * Drop third-party sources from the client map, keeping their file names and line
+ * mappings.
+ *
+ * The map ships in the package and the browser fetches it beside the bundle, so an
+ * inlined dependency's full source would add most of a megabyte to a download that
+ * exists to explain *this* plugin's stack frames. The dependency's own frames still
+ * resolve to its file and line; only its text is gone.
+ */
+async function trimClientMap() {
+  const path = resolve(root, 'lib/client.js.map')
+  const map = JSON.parse(await readFile(path, 'utf8'))
+  if (!Array.isArray(map.sources) || !Array.isArray(map.sourcesContent)) return
+  map.sourcesContent = map.sources.map((source, index) =>
+    source.includes('node_modules') ? null : map.sourcesContent[index])
+  await writeFile(path, JSON.stringify(map))
 }
 
 /** Fail the build when an artifact lost the shape the loader requires. */
@@ -109,5 +131,6 @@ async function verify() {
 await mkdir(resolve(root, 'lib'), { recursive: true })
 await buildHost()
 await buildClient()
+await trimClientMap()
 await verify()
 console.log(`[${ID}] built lib/index.js and lib/client.js`)

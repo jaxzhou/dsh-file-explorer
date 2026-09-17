@@ -32,12 +32,13 @@ import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/clie
 import type { InjectFace, PropsLocale, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
 import {
-  CodeBlock, FileTypeIcon, IconFolderClose16, IconFolderOpen16, IconRefreshOutline16, JsonTree,
-  MarkdownText, classifyFileType, fileSizeText, writeClipboard,
+  CodeBlock, FileTypeIcon, IconDownloadOutline16, IconFolderClose16, IconFolderOpen16,
+  IconRefreshOutline16, JsonTree, MarkdownText, Menu, classifyFileType, fileSizeText, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { JsonTreeLabels, MarkdownLabels } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
 import { canExportPdf, hasSourceToggle, previewFormatFor } from './format.ts'
+import { exportDocument, type ExportFormat } from './export/index.ts'
 import type { PreviewFormat } from './format.ts'
 import type { FilesInjected } from './face.ts'
 import { relativeImageDestinations, resolveRelativePath } from './markdown-assets.ts'
@@ -541,120 +542,6 @@ function FormattedBody({
 type PreviewBodyKind = 'rendered' | 'source' | 'image'
 
 /**
- * The HTML of an HTML file, with its active content removed.
- *
- * A PDF is static, so scripts buy the export nothing — and dropping them is what
- * lets the print document be an ordinary same-origin frame instead of a sandboxed
- * one, which in turn is what lets this component drive the print. Parsing is done
- * by the browser rather than by a pattern, so markup inside an attribute or a
- * comment cannot smuggle a tag past the strip.
- * @param source - the file's text.
- * @param title - title to add when the file declares none.
- * @returns a complete document with no scripts, handlers, or javascript URLs.
- */
-function printableHtml(source: string, title: string): string {
-  const parsed = new DOMParser().parseFromString(source, 'text/html')
-  for (const script of [...parsed.querySelectorAll('script')]) script.remove()
-  for (const element of [...parsed.querySelectorAll('*')]) {
-    for (const attribute of [...element.attributes]) {
-      const name = attribute.name.toLowerCase()
-      if (name.startsWith('on')) element.removeAttribute(attribute.name)
-      else if (/^\s*javascript:/i.test(attribute.value)) element.removeAttribute(attribute.name)
-    }
-  }
-  if (parsed.title === '') {
-    const tag = parsed.createElement('title')
-    tag.textContent = title
-    parsed.head.append(tag)
-  }
-  return `<!doctype html>${parsed.documentElement.outerHTML}`
-}
-
-/**
- * The application's own style sheets, so a cloned preview prints as it reads.
- *
- * The copy carries the dark-theme block too (`body[data-ds-dark-theme]`), which
- * simply never matches a print document's body: the page is dark ink on white
- * whichever theme the reader is using.
- * @returns every style tag and stylesheet link, serialized.
- */
-function appStyleTags(): string {
-  return [...document.querySelectorAll('style, link[rel="stylesheet"]')]
-    .map(node => node.outerHTML)
-    .join('\n')
-}
-
-/**
- * A standalone document holding one cloned preview body.
- *
- * The rules appended last are this page's own box, and the promise to keep the
- * document's fills — code-block greys and table rules — which browsers otherwise
- * drop when printing.
- * @param title - the document title, which the print dialog offers as a name.
- * @param body - the body markup.
- * @returns a complete document.
- */
-function styledDocument(title: string, body: string): string {
-  const safeTitle = title.replace(/[<&]/g, character => (character === '<' ? '&lt;' : '&amp;'))
-  return [
-    '<!doctype html><html><head><meta charset="utf-8">',
-    `<title>${safeTitle}</title>`,
-    appStyleTags(),
-    '<style>body{margin:0;padding:28px 32px;background:#fff;color:#111;',
-    'print-color-adjust:exact;-webkit-print-color-adjust:exact}</style>',
-    `</head><body>${body}</body></html>`,
-  ].join('')
-}
-
-/**
- * Frame a document off-screen, laid out at page width, and hand it back.
- *
- * The frame is sized like a page rather than collapsed to nothing: the print
- * engine lays the document out from the viewport it finds, so a zero-width frame
- * would print a zero-width column.
- * @returns the appended frame.
- */
-function createPrintFrame(): HTMLIFrameElement {
-  const frame = document.createElement('iframe')
-  frame.setAttribute('aria-hidden', 'true')
-  frame.setAttribute('data-preview-print', '')
-  frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:794px;height:1123px;border:0'
-  document.body.appendChild(frame)
-  return frame
-}
-
-/**
- * Write one document into a frame, and print it.
- *
- * Printing is how a reader gets a PDF: every browser's print dialog offers "Save
- * as PDF", and its own layout engine keeps the text as text rather than
- * rasterising the page the way a canvas-based PDF library would.
- *
- * The frame outlives the call: a browser may return from print() before its
- * preview has laid the document out, so the frame removes itself on afterprint
- * instead of on return. A frame left over from an earlier export — one whose
- * afterprint never arrived — is cleared first, so exports cannot accumulate off
- * screen.
- * @param html - a complete document.
- */
-function printDocument(html: string): void {
-  for (const stale of document.querySelectorAll('iframe[data-preview-print]')) stale.remove()
-  const frame = createPrintFrame()
-  const doc = frame.contentDocument
-  /* v8 ignore next -- a frame appended to a live document always has one. */
-  if (doc === null) return
-  doc.open()
-  doc.write(html)
-  doc.close()
-  const view = frame.contentWindow
-  /* v8 ignore next -- a frame appended to a live document always has one. */
-  if (view === null) return
-  view.addEventListener('afterprint', () => { frame.remove() }, { once: true })
-  view.focus()
-  view.print()
-}
-
-/**
  * Resolve the body a file's format and the tab's mode choice agree on.
  * @param content - what the read delivered, or null while it has not settled.
  * @param format - the file's format.
@@ -771,7 +658,7 @@ function PreviewBody({
  * @returns the two-pane explorer.
  */
 export function FilesView({
-  sessionId, useSessions, useStore, actions, list, read, readImage, t,
+  sessionId, useSessions, useStore, actions, list, read, readImage, readText, t,
 }: FilesViewProps): ReactNode {
   const cwd = useSessions(sessions => sessions.byId[sessionId]?.cwd)
   const state = useStore(store => store)
@@ -781,6 +668,12 @@ export function FilesView({
   /** The tab whose text was just copied, so only its button confirms. */
   const [copied, setCopied] = useState<string | null>(null)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Whether the export menu is showing. */
+  const [exportOpen, setExportOpen] = useState(false)
+  /** Whether an export is being written, so the control can say so. */
+  const [exporting, setExporting] = useState(false)
+  /** Why the last export could not be written. */
+  const [exportError, setExportError] = useState<string | null>(null)
 
   useEffect(() => () => {
     if (copyTimer.current !== null) clearTimeout(copyTimer.current)
@@ -869,24 +762,36 @@ export function FilesView({
     })
   }
   /**
-   * Export the rendered body as a PDF, through the browser's own print dialog.
+   * Export the rendered body as a file, and download it.
    *
-   * Markdown prints from the live document node, so what lands on the page is
-   * exactly what the reader sees — including the code fences the primitive
-   * highlighted. HTML prints from its own document with the active content
-   * stripped, which a static page has no use for.
+   * Markdown is read from the live document node, so the Word file and the PDF
+   * pages carry exactly what the reader sees — including the code fences the
+   * primitive highlighted and the images it loaded. An HTML document is read from
+   * its own text, re-rendered off screen by the export, because the frame the
+   * reader sees is sandboxed and unreadable from here by design.
+   * @param target - the file to write.
    */
-  const exportPdf = (): void => {
+  const runExport = (target: ExportFormat): void => {
     if (active === null || format === null || content === null || content.kind !== 'text') return
     if (!canExportPdf(format)) return
     const name = pathParts(active).name
-    if (format.kind === 'html') {
-      printDocument(printableHtml(content.page.text, name))
-      return
-    }
-    const prose = proseRef.current
-    if (prose === null) return
-    printDocument(styledDocument(name, prose.outerHTML))
+    setExportError(null)
+    setExporting(true)
+    void exportDocument(target, {
+      name,
+      title: name,
+      kind: format.kind === 'html' ? 'html' : 'markdown',
+      prose: proseRef.current,
+      html: content.page.text,
+      directory: pathParts(active).directory,
+      assets: { readImage, readText },
+    })
+      .catch((error: unknown) => {
+        // An export that cannot be written says so; a download that silently never
+        // arrives is the one outcome a reader cannot diagnose.
+        setExportError(error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => { setExporting(false) })
   }
   const closeTab = (path: string): void => {
     actions.closeFile(path)
@@ -1017,16 +922,39 @@ export function FilesView({
               </button>
             )}
             {active !== null && body === 'rendered' && format !== null && canExportPdf(format) && (
-              <button
-                type="button"
-                className="dsh-fe-tool"
-                aria-label={t('preview.pdf')}
-                title={t('preview.pdf')}
-                data-preview-pdf
-                onClick={exportPdf}
-              >
-                {t('preview.pdf')}
-              </button>
+              <Menu
+                open={exportOpen}
+                anchor={(
+                  <button
+                    type="button"
+                    className="dsh-fe-tool"
+                    aria-label={t('export.label')}
+                    title={t('export.label')}
+                    aria-haspopup="menu"
+                    aria-expanded={exportOpen}
+                    aria-busy={exporting || undefined}
+                    disabled={exporting}
+                    data-preview-export
+                    onClick={() => { setExportOpen(open => !open) }}
+                  >
+                    <IconDownloadOutline16 />
+                  </button>
+                )}
+                items={[
+                  { id: 'pdf', label: t('export.pdf') },
+                  { id: 'word', label: t('export.word') },
+                ]}
+                onSelect={(id) => {
+                  setExportOpen(false)
+                  runExport(id === 'word' ? 'word' : 'pdf')
+                }}
+                onClose={() => { setExportOpen(false) }}
+                // Portalled: this pane clips its own overflow, so an in-place list
+                // would be cropped by the view's edge.
+                portal
+                align="end"
+                side="bottom"
+              />
             )}
             {active !== null && body === 'source' && (
               <button
@@ -1055,6 +983,11 @@ export function FilesView({
             )}
           </div>
           {active === null && <div className="dsh-fe-status">{t('preview.placeholder')}</div>}
+          {exportError !== null && (
+            <p className="dsh-fe-note dsh-fe-note-error" data-preview-export-error>
+              {t('export.failed', { message: exportError })}
+            </p>
+          )}
           {active !== null && (preview === undefined || preview.kind === 'loading') && (
             <div className="dsh-fe-status">{t('preview.loading')}</div>
           )}

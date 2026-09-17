@@ -44,8 +44,8 @@ The right pane picks each tab's body from the file:
 
 | Category | Preview |
 |---|---|
-| **Markdown** | Rendered GFM — headings, tables, task lists, quotes, math, footnotes, images referenced beside the file, highlighted code fences — with a **Source** toggle, and **Export PDF** |
-| **HTML** | Drawn as a page in a sandboxed frame: the file's own CSS applies, and its scripts run in an opaque origin that cannot reach this application. With a **Source** toggle, and **Export PDF** |
+| **Markdown** | Rendered GFM — headings, tables, task lists, quotes, math, footnotes, images referenced beside the file, highlighted code fences — with a **Source** toggle and an **Export** menu |
+| **HTML** | Drawn as a page in a sandboxed frame: the file's own CSS applies, and its scripts run in an opaque origin that cannot reach this application. With a **Source** toggle and an **Export** menu |
 | **JSON** | A collapsible tree with per-value copy, and the same toggle |
 | **Source code** | Syntax highlighting, line numbers, and a copy button for 24 grammars: TypeScript/JavaScript, shell, Python, Ruby, Go, Rust, Java, C, C++, C#, Kotlin, Swift, PHP, YAML, TOML, INI, HTML, CSS, SCSS, Less, SQL, XML, Lua, MDX |
 | **Images** | PNG, JPEG, GIF, WebP, AVIF, BMP, ICO and SVG, drawn to the pane. An SVG goes through `<img>`, so its scripts never run |
@@ -54,10 +54,18 @@ The right pane picks each tab's body from the file:
 Text previews wrap at their spaces and keep every word whole; an image reads its
 complete bytes. Every text body carries a **Copy** control in the pane's toolbar,
 which copies the file's own text — a rendered Markdown document copies its
-Markdown source. A rendered Markdown or HTML file also carries **Export PDF**,
-which hands the page to the browser's print dialog: every browser offers "Save as
-PDF" there, and its own layout engine keeps the text as text rather than
-rasterising the page the way a canvas-based PDF library would.
+Markdown source.
+
+A rendered Markdown or HTML document also carries **Export**, which **downloads a
+file directly** — no print dialog — in either of two formats:
+
+| Format | What it is |
+|---|---|
+| **PDF** | A picture of the page, laid out as A4 and sliced to fit. The text in it is not selectable. That is deliberate: a text-mode PDF of a Chinese document would need a CJK font embedded in the plugin, which is megabytes for a preview tool |
+| **Word** (`.docx`) | A real Word document: headings, lists, tables, code and images, with the text still text — editable, searchable, and rendered with Word's own fonts. Chinese included |
+
+A document's own local assets come with it: the images a Markdown file references
+beside it, and the images and stylesheets an HTML file links to.
 
 ## Requirements
 
@@ -147,8 +155,13 @@ restart the profile.
   the second loads directly, and the third is not fetched.
 - **HTML previews do not resolve relative assets.** A page drawn from a Blob
   document has no base to resolve its own `style.css` or images against, so only
-  absolute URLs load there too. An export prints the page as it renders without
-  its scripts, which a static PDF has no use for anyway.
+  absolute URLs load there. **An export does resolve them** — the file it writes is
+  read from a copy that has been made to stand alone — so a document can export
+  with pictures it does not show in the preview.
+- **A PDF's text is a picture.** Nothing in it can be selected or searched. Export
+  Word instead when the text has to stay text.
+- **Long documents are cut at 60 PDF pages**, and an image past 8 MiB is left out;
+  both are stated here because a silent cut reads as a complete export.
 
 ## Contributing
 
