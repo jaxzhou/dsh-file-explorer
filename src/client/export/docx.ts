@@ -148,7 +148,12 @@ export function docxFromBlocks(blocks: readonly Block[], title: string): Uint8Ar
         const size = HEADING_HALF_POINTS[block.level] ?? 24
         body.push(paragraphXml(
           block.runs.map(run => ({ ...run, bold: true })),
-          `<w:spacing w:before="240" w:after="120"/><w:rPr><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr>`,
+          // The outline level is what makes this a heading rather than a bold
+          // paragraph: Word reads it as one, and it is direct formatting, so the
+          // package still needs no styles part for the style to resolve. It is
+          // also what the reader next door finds a heading by.
+          `<w:outlineLvl w:val="${block.level - 1}"/>`
+          + `<w:spacing w:before="240" w:after="120"/><w:rPr><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr>`,
         ))
         break
       }

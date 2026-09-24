@@ -425,6 +425,13 @@ const CSS = `
   white-space: normal;
 }
 
+/* A picture in a document — a diagram this pane drew, or one the author
+   referenced — centres while it fits, the way the pane's own image preview
+   does. */
+.dsh-fe-prose img {
+  margin-inline: auto;
+}
+
 .dsh-fe-json {
   min-width: 0;
   font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace);
@@ -445,6 +452,228 @@ const CSS = `
   max-width: 100%;
   height: auto;
   border-radius: 6px;
+}
+
+/* PDF: the browser's own reader, filling the pane. The element has to be given
+   the pane's whole height rather than a scrollport's, because the reader scrolls
+   its own pages. */
+.dsh-fe-pdfhost {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
+.dsh-fe-pdf {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--dsw-alias-bg-skeleton);
+}
+
+/* A Word document, drawn from the blocks the reader unpacked. This is the
+   file's own structure, so it is styled on its own rather than through the
+   Markdown sheet next door. */
+.dsh-fe-doc {
+  min-width: 0;
+  color: var(--dsw-alias-label-primary);
+  /* Keep words whole and break only a token that cannot fit, which is the rule
+     every text body in this pane follows. */
+  overflow-wrap: break-word;
+}
+
+.dsh-fe-doc :where(h1, h2, h3, h4, h5, h6) {
+  margin: 20px 0 8px;
+  line-height: 1.3;
+}
+
+.dsh-fe-doc h1 { font-size: 20px; }
+.dsh-fe-doc h2 { font-size: 17px; }
+.dsh-fe-doc h3 { font-size: 15px; }
+.dsh-fe-doc :where(h4, h5, h6) { font-size: 13px; }
+
+.dsh-fe-doc p {
+  margin: 8px 0;
+}
+
+.dsh-fe-doc blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.dsh-fe-doc-list {
+  margin: 4px 0;
+}
+
+/* Each level of nesting steps further in, which is what the document meant. */
+.dsh-fe-doc-list[data-depth='1'] { margin-left: 18px; }
+.dsh-fe-doc-list[data-depth='2'] { margin-left: 36px; }
+.dsh-fe-doc-list[data-depth='3'] { margin-left: 54px; }
+.dsh-fe-doc-list[data-depth='4'] { margin-left: 72px; }
+
+.dsh-fe-doc-list :where(ul, ol) {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.dsh-fe-doc-list li {
+  margin: 2px 0;
+}
+
+.dsh-fe-doc-table {
+  max-width: 100%;
+  margin: 10px 0;
+  border-collapse: collapse;
+}
+
+.dsh-fe-doc-table td {
+  padding: 4px 8px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  vertical-align: top;
+}
+
+.dsh-fe-doc-code {
+  margin: 8px 0;
+  padding: 8px 10px;
+  overflow: auto;
+  font-family: var(--ds-font-family-code, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  white-space: pre;
+  background: var(--dsw-alias-bg-skeleton);
+  border-radius: 6px;
+}
+
+.dsh-fe-doc-rule {
+  margin: 12px 0;
+  border: 0;
+  border-top: 1px solid var(--dsw-alias-border-l3);
+}
+
+.dsh-fe-doc-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 8px auto;
+  border-radius: 6px;
+}
+
+/* A workbook: one sheet at a time, its own scrollport, and a sticky row number
+   so a wide sheet stays readable while it is scrolled sideways. */
+.dsh-fe-sheet {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dsh-fe-sheet-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 6px 8px 0;
+  overflow-x: auto;
+}
+
+.dsh-fe-sheet-tab {
+  flex: none;
+  max-width: 180px;
+  padding: 3px 10px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  background: transparent;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.dsh-fe-sheet-tab:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.dsh-fe-sheet-tab[aria-selected='true'] {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.dsh-fe-sheet-scroll {
+  padding: 8px;
+}
+
+.dsh-fe-sheet-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dsh-fe-sheet-table :where(td, th) {
+  max-width: 320px;
+  padding: 2px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  border: 1px solid var(--dsw-alias-border-l3);
+}
+
+.dsh-fe-sheet-index {
+  position: sticky;
+  left: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-weight: 400;
+  text-align: right;
+  background: var(--dsw-alias-bg-skeleton);
+}
+
+/* A deck, as an outline: one card per slide. */
+.dsh-fe-slides {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dsh-fe-slide {
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l3);
+  border-radius: 8px;
+}
+
+.dsh-fe-slide-index {
+  margin-bottom: 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.dsh-fe-slide-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.dsh-fe-slide-lines {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.dsh-fe-slide-lines li {
+  margin: 2px 0;
+}
+
+.dsh-fe-slide-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.dsh-fe-slide-image {
+  max-width: 160px;
+  max-height: 120px;
+  border-radius: 4px;
 }
 `
 

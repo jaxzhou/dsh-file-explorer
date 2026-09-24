@@ -277,6 +277,7 @@ export async function exportDocument(format: ExportFormat, request: ExportReques
       const standalone = await standaloneHtml(request.html, request.title, request.directory, request.assets)
       // Word reads the parsed document directly; the PDF needs a frame to draw.
       if (format === 'word') {
+        await settleImages(standalone.document.body)
         downloadBlob(
           new Blob([docxFromBlocks(blocksFromElement(standalone.document.body), request.title)], {
             type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -291,6 +292,10 @@ export async function exportDocument(format: ExportFormat, request: ExportReques
     }
     if (root === null) return
     if (format === 'word') {
+      // The drawing a picture becomes is scaled from the size it rendered at, so
+      // a picture that has not decoded would arrive without an aspect ratio. This
+      // is also what carries a diagram the pane drew below the fold into the file.
+      await settleImages(root)
       downloadBlob(
         new Blob([docxFromBlocks(blocksFromElement(root), request.title)], {
           type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

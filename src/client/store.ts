@@ -69,13 +69,29 @@ export interface PreviewImage {
 }
 
 /**
+ * A file's complete bytes, for the formats that cannot be read as a page of
+ * lines: a PDF, which the browser's own viewer draws, and an Office package,
+ * which the pane unpacks.
+ */
+export interface PreviewFile {
+  /** The file's complete bytes, base64, as the Remote returned them. */
+  readonly data: string
+  /** The media type its suffix says the bytes carry. */
+  readonly mediaType: string
+  /** Byte size of the complete file, when the backend reports it. */
+  readonly bytes: number | undefined
+}
+
+/**
  * What one read delivered. A tab decides which arm it needs from the file's name
- * before reading, so the two never mix: a page of text for everything readable
- * as text, complete bytes for an image.
+ * before reading, so the three never mix: a page of text for everything readable
+ * as text, complete bytes for an image, and complete bytes for a document the
+ * pane draws itself.
  */
 export type PreviewContent =
   | { readonly kind: 'text'; readonly page: PreviewText }
   | { readonly kind: 'image'; readonly image: PreviewImage }
+  | { readonly kind: 'file'; readonly file: PreviewFile }
 
 /**
  * Which body a tab draws for a file that has more than one. An absent entry

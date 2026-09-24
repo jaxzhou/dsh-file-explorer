@@ -171,6 +171,10 @@ test('the stylesheet installer writes one owned style tag', async () => {
       '.dsh-fe-source', '.dsh-fe-prose', '.dsh-fe-json', '.dsh-fe-image',
       '.dsh-fe-tabs', '.dsh-fe-tab-label', '.dsh-fe-tab-close', '.dsh-fe-open-dot',
       '.dsh-fe-lang', '.dsh-fe-html-frame',
+      // The document bodies: a rename here would leave a PDF, a Word document, a
+      // sheet or a deck unstyled rather than broken.
+      '.dsh-fe-pdf', '.dsh-fe-doc', '.dsh-fe-doc-table', '.dsh-fe-sheet-table',
+      '.dsh-fe-sheet-index', '.dsh-fe-slide',
     ]) {
       assert.ok(css.includes(hook), `stylesheet lost ${hook}`)
     }
@@ -338,6 +342,531 @@ test('a relative destination resolves against the document directory', async () 
   assert.equal(resolveRelativePath('/w/proj/', 'a%zz.png'), '/w/proj/a%zz.png')
   // Windows keeps its own separator and its drive segment.
   assert.equal(resolveRelativePath('C:\\w\\proj\\', 'images\\a.png'), 'C:\\w\\proj\\images\\a.png')
+})
+
+test('a mermaid fence is found wherever a document really opens one', async () => {
+  const registration = await loadClientFactory()
+  const { findMermaidFences } = registration.factory(stubRequire())
+
+  const document = [
+    '# Architecture',
+    '',
+    '```mermaid',
+    'flowchart LR',
+    '  A --> B',
+    '```',
+    '',
+    '~~~Mermaid',
+    'sequenceDiagram',
+    '  A->>B: hi',
+    '~~~~',
+    '',
+    '```js',
+    'console.log(1)',
+    '```',
+  ].join('\n')
+
+  const fences = findMermaidFences(document)
+  assert.equal(fences.length, 2)
+  assert.equal(fences[0].code, 'flowchart LR\n  A --> B')
+  assert.equal(fences[0].source, '```mermaid\nflowchart LR\n  A --> B\n```')
+  // The offsets are the offsets: what they slice is the fence itself.
+  assert.equal(document.slice(fences[0].start, fences[0].end), fences[0].source)
+  // A tilde fence counts, the language is case-insensitive, and a longer closing
+  // run closes a shorter opening one.
+  assert.equal(fences[1].code, 'sequenceDiagram\n  A->>B: hi')
+  assert.equal(document.slice(fences[1].start, fences[1].end), '~~~Mermaid\nsequenceDiagram\n  A->>B: hi\n~~~~')
+})
+
+test('only a real fence opens a diagram', async () => {
+  const registration = await loadClientFactory()
+  const { findMermaidFences } = registration.factory(stubRequire())
+
+  // A mermaid fence quoted inside another fenced block is source text, exactly
+  // as the parser the pane renders with reads it.
+  assert.deepEqual(findMermaidFences(['```markdown', '```mermaid', 'A --> B', '```', '```'].join('\n')), [])
+  // Four spaces of indent is an indented code block, not a fence.
+  assert.deepEqual(findMermaidFences('    ```mermaid\n    A --> B\n    ```'), [])
+  // A backtick fence whose info string carries a backtick is not an opening fence.
+  assert.deepEqual(findMermaidFences('```mer`maid\nA --> B\n```'), [])
+  // A language that merely starts with the word is a different language.
+  assert.deepEqual(findMermaidFences('```mermaidjs\nA --> B\n```'), [])
+  // An empty info string is plain code.
+  assert.deepEqual(findMermaidFences('```\nA --> B\n```'), [])
+
+  // A fence that never closes runs to the end of the document, as it does for
+  // the parser.
+  const unterminated = 'text\n\n```mermaid\nflowchart LR\n  A --> B'
+  const [open] = findMermaidFences(unterminated)
+  assert.equal(open.code, 'flowchart LR\n  A --> B')
+  assert.equal(open.end, unterminated.length)
+  assert.equal(open.source, '```mermaid\nflowchart LR\n  A --> B')
+
+  // CRLF line endings reach the diagram without their carriage returns.
+  assert.equal(findMermaidFences('```mermaid\r\nA --> B\r\n```')[0].code, 'A --> B')
+})
+
+test('a diagram fence is replaced without disturbing the document around it', async () => {
+  const registration = await loadClientFactory()
+  const { findMermaidFences, mermaidDestination, relativeImageDestinations, replaceMermaidFences }
+    = registration.factory(stubRequire())
+
+  const document = [
+    '# A', '', 'before', '', '```mermaid', 'flowchart LR', '  A --> B', '```', '', 'after', '',
+  ].join('\n')
+  const rewritten = replaceMermaidFences(document, findMermaidFences(document), () =>
+    `![diagram](${mermaidDestination(0)})`)
+  assert.equal(
+    rewritten,
+    ['# A', '', 'before', '', '![diagram](dsh-mermaid-0.png)', '', 'after', ''].join('\n'),
+  )
+  // The placeholder is a local destination on purpose: that is what routes it to
+  // the pane's own image vocabulary rather than to the renderer's remote-image
+  // allowlist, which would refuse to display it.
+  assert.deepEqual(relativeImageDestinations(rewritten), ['dsh-mermaid-0.png'])
+
+  // A document with no diagrams comes back untouched, but only when its fences
+  // were genuinely absent.
+  const plain = '# A\n\nno code fences here\n'
+  assert.equal(replaceMermaidFences(plain, findMermaidFences(plain), () => 'x'), plain)
+})
+
+test('a diagram failure is reported as a single line', async () => {
+  const registration = await loadClientFactory()
+  const { mermaidErrorMessage } = registration.factory(stubRequire())
+
+  // Mermaid's parse report repeats the diagram source across several lines; the
+  // line the reader meets inline is its first.
+  const report = new Error('Parse error on line 2:\n  A -->\n  ----^\nExpecting something else')
+  assert.equal(mermaidErrorMessage(report), 'Parse error on line 2:')
+  assert.equal(mermaidErrorMessage('just text'), 'just text')
+  assert.equal(mermaidErrorMessage(new Error('')), '')
+  assert.equal(mermaidErrorMessage(new Error('x'.repeat(400))).length, 200)
+})
+
+
+/** Join byte chunks into one array. */
+function concat(chunks) {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+  const out = new Uint8Array(total)
+  let at = 0
+  for (const chunk of chunks) {
+    out.set(chunk, at)
+    at += chunk.length
+  }
+  return out
+}
+
+/**
+ * Build a ZIP whose entries are deflated, which is what a real Office package
+ * uses. The writer next door stores its entries, so this is the only way the
+ * reader's inflate path gets exercised.
+ */
+async function deflateZip(entries) {
+  const encode = value => new TextEncoder().encode(value)
+  const locals = []
+  const central = []
+  let offset = 0
+  for (const [name, text] of entries) {
+    const raw = encode(text)
+    const deflated = new Uint8Array(await new Response(
+      new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate-raw')),
+    ).arrayBuffer())
+    const nameBytes = encode(name)
+    const header = new Uint8Array(30 + nameBytes.length)
+    const headerView = new DataView(header.buffer)
+    headerView.setUint32(0, 0x04034b50, true)
+    headerView.setUint16(4, 20, true)
+    headerView.setUint16(6, 0x0800, true)
+    headerView.setUint16(8, 8, true)
+    headerView.setUint32(18, deflated.length, true)
+    headerView.setUint32(22, raw.length, true)
+    headerView.setUint16(26, nameBytes.length, true)
+    header.set(nameBytes, 30)
+    locals.push(header, deflated)
+
+    const record = new Uint8Array(46 + nameBytes.length)
+    const recordView = new DataView(record.buffer)
+    recordView.setUint32(0, 0x02014b50, true)
+    recordView.setUint16(4, 20, true)
+    recordView.setUint16(6, 20, true)
+    recordView.setUint16(8, 0x0800, true)
+    recordView.setUint16(10, 8, true)
+    recordView.setUint32(20, deflated.length, true)
+    recordView.setUint32(24, raw.length, true)
+    recordView.setUint16(28, nameBytes.length, true)
+    recordView.setUint32(42, offset, true)
+    record.set(nameBytes, 46)
+    central.push(record)
+    offset += header.length + deflated.length
+  }
+  const directory = concat(central)
+  const end = new Uint8Array(22)
+  const endView = new DataView(end.buffer)
+  endView.setUint32(0, 0x06054b50, true)
+  endView.setUint16(8, entries.length, true)
+  endView.setUint16(10, entries.length, true)
+  endView.setUint32(12, directory.length, true)
+  endView.setUint32(16, offset, true)
+  return concat([...locals, directory, end])
+}
+
+test('a file name decides the document it is', async () => {
+  const registration = await loadClientFactory()
+  const { officeKindOf, previewFormatFor, readsAllBytes } = registration.factory(stubRequire())
+
+  assert.equal(previewFormatFor('a.pdf').kind, 'pdf')
+  assert.equal(previewFormatFor('a.pdf').mediaType, 'application/pdf')
+  assert.equal(previewFormatFor('a.docx').kind, 'word')
+  assert.equal(previewFormatFor('a.docx').mediaType,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+  assert.equal(previewFormatFor('a.xlsx').kind, 'sheet')
+  assert.equal(previewFormatFor('a.pptx').kind, 'slides')
+  // The macro-enabled spellings are the same packages.
+  assert.equal(previewFormatFor('a.docm').kind, 'word')
+  assert.equal(previewFormatFor('a.xlsm').kind, 'sheet')
+  assert.equal(previewFormatFor('a.pptm').kind, 'slides')
+  // The formats before OOXML are recognised only so the pane can decline them.
+  assert.equal(previewFormatFor('a.doc').kind, 'legacyOffice')
+  assert.equal(previewFormatFor('a.xls').kind, 'legacyOffice')
+  assert.equal(previewFormatFor('a.ppt').kind, 'legacyOffice')
+  // Case does not decide anything.
+  assert.equal(previewFormatFor('REPORT.PDF').kind, 'pdf')
+
+  // A whole-file read is what a picture, a PDF and a package need; text formats
+  // are still read a page at a time.
+  for (const path of ['a.png', 'a.pdf', 'a.docx', 'a.xlsx', 'a.pptx']) {
+    assert.equal(readsAllBytes(previewFormatFor(path)), true, path)
+  }
+  for (const path of ['a.md', 'a.html', 'a.json', 'a.ts', 'a.txt', 'a.doc']) {
+    assert.equal(readsAllBytes(previewFormatFor(path)), false, path)
+  }
+
+  assert.equal(officeKindOf(previewFormatFor('a.docx')), 'word')
+  assert.equal(officeKindOf(previewFormatFor('a.xlsx')), 'sheet')
+  assert.equal(officeKindOf(previewFormatFor('a.pptx')), 'slides')
+  assert.equal(officeKindOf(previewFormatFor('a.pdf')), undefined)
+})
+
+test('a package is read through its central directory, stored or deflated', async () => {
+  const registration = await loadClientFactory()
+  const { openZip, zip, crc32 } = registration.factory(stubRequire())
+
+  // What the exporter writes: stored entries.
+  const stored = zip([
+    { name: 'word/document.xml', data: new TextEncoder().encode('<a>one</a>') },
+    { name: 'word/media/image1.png', data: new Uint8Array([1, 2, 3, 4, 5]) },
+  ])
+  const storedArchive = openZip(stored)
+  assert.deepEqual(storedArchive.names, ['word/document.xml', 'word/media/image1.png'])
+  assert.equal(await storedArchive.text('word/document.xml'), '<a>one</a>')
+  assert.deepEqual([...(await storedArchive.read('word/media/image1.png'))], [1, 2, 3, 4, 5])
+  assert.equal(storedArchive.has('nope.xml'), false)
+  assert.equal(await storedArchive.read('nope.xml'), undefined)
+
+  // What everyone else writes: deflated entries. The CRC of the raw bytes is in
+  // the archive, so this also pins the checksum both sides share.
+  const deflated = await deflateZip([
+    ['xl/workbook.xml', '<workbook>压缩</workbook>'],
+    ['xl/worksheets/sheet1.xml', `<worksheet>${'0'.repeat(2000)}</worksheet>`],
+  ])
+  const deflatedArchive = openZip(deflated)
+  assert.equal(await deflatedArchive.text('xl/workbook.xml'), '<workbook>压缩</workbook>')
+  assert.equal((await deflatedArchive.text('xl/worksheets/sheet1.xml')).length, 2023)
+  assert.equal(crc32(new TextEncoder().encode('<workbook>压缩</workbook>')) > 0, true)
+
+  // Something that is not an archive says so, rather than reading garbage.
+  assert.throws(() => openZip(new Uint8Array([1, 2, 3, 4])), /not a ZIP archive/)
+})
+
+test('the XML reader keeps text, prefixes, and references it cannot expand', async () => {
+  const registration = await loadClientFactory()
+  const { attribute, descendants, elements, parseXml, textContent } = registration.factory(stubRequire())
+
+  const root = parseXml([
+    '<?xml version="1.0"?>',
+    '<!-- a comment -->',
+    '<w:document xmlns:w="urn:w" xmlns:r="urn:r">',
+    '  <w:body>',
+    '    <w:p w:val="7" r:id="rId1"><w:t xml:space="preserve">a &amp; b</w:t></w:p>',
+    '    <w:p><w:t>&#x4E2D;&#25991; &unknown;</w:t></w:p>',
+    '    <w:p><w:t><![CDATA[<raw> & kept]]></w:t></w:p>',
+    '    <w:p/>',
+    '  </w:body>',
+    '</w:document>',
+  ].join('\n'))
+
+  assert.equal(root.local, 'document')
+  assert.equal(root.name, 'w:document')
+  const body = elements(root, 'body')[0]
+  const paragraphs = elements(body, 'p')
+  assert.equal(paragraphs.length, 4)
+  // A prefixed attribute is found by its local name, whichever prefix binds it.
+  assert.equal(attribute(paragraphs[0], 'val'), '7')
+  assert.equal(attribute(paragraphs[0], 'id'), 'rId1')
+  assert.equal(attribute(paragraphs[0], 'missing'), undefined)
+  // Named, decimal, and hexadecimal references resolve; an unknown name is kept
+  // as written rather than dropped.
+  assert.equal(textContent(paragraphs[0]), 'a & b')
+  assert.equal(textContent(paragraphs[1]), '中文 &unknown;')
+  // A CDATA section is text, entities and all.
+  assert.equal(textContent(paragraphs[2]), '<raw> & kept')
+  // A self-closing element has no children.
+  assert.equal(paragraphs[3].children.length, 0)
+  // Descendants are found across the tree, in document order.
+  assert.equal(descendants(root, 't').length, 3)
+
+  assert.throws(() => parseXml('<a><b></a>'), /closes/)
+  assert.throws(() => parseXml('<a>'), /never closed/)
+  assert.throws(() => parseXml('not xml'), /no root element/)
+})
+
+test('a Word document is written and read back as the same blocks', async () => {
+  const registration = await loadClientFactory()
+  const { docxFromBlocks, readWord } = registration.factory(stubRequire())
+
+  const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const blocks = [
+    { kind: 'heading', level: 2, runs: [{ text: 'Chapter' }] },
+    { kind: 'paragraph', runs: [{ text: 'a ' }, { text: 'b', bold: true }, { text: ' c', code: true }] },
+    { kind: 'table', rows: [{ cells: [{ runs: [{ text: 'A' }] }, { runs: [{ text: 'B' }] }] }] },
+    { kind: 'image', src: png, alt: 'dot', width: 40, height: 20 },
+  ]
+  const read = await readWord(docxFromBlocks(blocks, 'doc'))
+
+  assert.equal(read.kind, 'word')
+  assert.equal(read.truncated, false)
+  // The writer marks a heading with an outline level, which is what the reader
+  // finds it by — so a heading survives the trip as a heading.
+  assert.deepEqual(read.blocks[0], { kind: 'heading', level: 2, runs: [{ text: 'Chapter', bold: true }] })
+  assert.deepEqual(read.blocks[1], {
+    kind: 'paragraph',
+    runs: [{ text: 'a ' }, { text: 'b', bold: true }, { text: ' c', code: true }],
+  })
+  assert.deepEqual(read.blocks[2], blocks[2])
+  // The picture comes back as the same bytes under its own media type, at the
+  // size it was given.
+  assert.equal(read.blocks[3].kind, 'image')
+  assert.equal(read.blocks[3].src, png)
+  assert.equal(read.blocks[3].width, 40)
+  assert.equal(read.blocks[3].height, 20)
+
+  await assert.rejects(readWord(new TextEncoder().encode('nope')), /not a ZIP archive|Word/)
+})
+
+test('a Word document is read the way Word writes one', async () => {
+  const registration = await loadClientFactory()
+  const { readWord, zip } = registration.factory(stubRequire())
+
+  // A document as Word itself writes it: styles carry the heading level, and the
+  // numbering part is what makes a list ordered.
+  const document = [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    '<w:document xmlns:w="urn:w" xmlns:r="urn:r" xmlns:wp="urn:wp" xmlns:a="urn:a">',
+    '<w:body>',
+    '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>标题</w:t></w:r></w:p>',
+    '<w:p><w:r><w:t>plain </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>bold</w:t></w:r>',
+    '<w:r><w:rPr><w:b w:val="0"/></w:rPr><w:t> not</w:t></w:r></w:p>',
+    '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>one</w:t></w:r></w:p>',
+    '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>two</w:t></w:r></w:p>',
+    '<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>bullet</w:t></w:r></w:p>',
+    '<w:p><w:r><w:drawing><wp:extent cx="914400" cy="457200"/><a:blip r:embed="rId9"/></w:drawing></w:r></w:p>',
+    '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>x</w:t></w:r></w:p></w:tc></w:tr></w:tbl>',
+    '</w:body></w:document>',
+  ].join('')
+  const styles = '<w:styles xmlns:w="urn:w"><w:style w:type="paragraph" w:styleId="Heading1">'
+    + '<w:name w:val="heading 1"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style></w:styles>'
+  const numbering = '<w:numbering xmlns:w="urn:w">'
+    + '<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/></w:lvl></w:abstractNum>'
+    + '<w:abstractNum w:abstractNumId="5"><w:lvl w:ilvl="1"><w:numFmt w:val="bullet"/></w:lvl></w:abstractNum>'
+    + '<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>'
+    + '<w:num w:numId="2"><w:abstractNumId w:val="5"/></w:num>'
+    + '</w:numbering>'
+  const rels = '<Relationships xmlns="urn:rels">'
+    + '<Relationship Id="rId9" Type="urn:image" Target="media/image1.png"/>'
+    + '<Relationship Id="rId8" Type="urn:image" Target="https://example.com/x.png" TargetMode="External"/>'
+    + '</Relationships>'
+
+  const read = await readWord(zip([
+    { name: 'word/document.xml', data: new TextEncoder().encode(document) },
+    { name: 'word/styles.xml', data: new TextEncoder().encode(styles) },
+    { name: 'word/numbering.xml', data: new TextEncoder().encode(numbering) },
+    { name: 'word/_rels/document.xml.rels', data: new TextEncoder().encode(rels) },
+    { name: 'word/media/image1.png', data: new Uint8Array([137, 80, 78, 71]) },
+  ]))
+
+  assert.deepEqual(read.blocks.map(block => block.kind),
+    ['heading', 'paragraph', 'list', 'list', 'list', 'image', 'table'])
+  assert.deepEqual(read.blocks[0], { kind: 'heading', level: 1, runs: [{ text: '标题' }] })
+  // `w:b w:val="0"` is a toggle that means off.
+  assert.deepEqual(read.blocks[1], {
+    kind: 'paragraph',
+    runs: [{ text: 'plain ' }, { text: 'bold', bold: true }, { text: ' not' }],
+  })
+  // The numbering part decides which list is ordered; the second is a bullet at
+  // depth one.
+  assert.deepEqual(read.blocks[2], { kind: 'list', ordered: true, depth: 0, runs: [{ text: 'one' }] })
+  assert.deepEqual(read.blocks[4], { kind: 'list', ordered: false, depth: 1, runs: [{ text: 'bullet' }] })
+  // 914400 EMU is 96 CSS pixels, and 457200 is 48.
+  assert.equal(read.blocks[5].src, 'data:image/png;base64,iVBORw==')
+  assert.equal(read.blocks[5].width, 96)
+  assert.equal(read.blocks[5].height, 48)
+  // An external relationship's picture is never fetched.
+  assert.equal(read.blocks.some(block => block.kind === 'image' && block.alt === 'x.png'), false)
+})
+
+test('a workbook is read as the cells a reader would see', async () => {
+  const registration = await loadClientFactory()
+  const { readSheet, zip } = registration.factory(stubRequire())
+
+  const workbook = '<workbook xmlns="urn:x" xmlns:r="urn:r"><sheets>'
+    + '<sheet name="数据" sheetId="1" r:id="rId1"/>'
+    + '<sheet name="More" sheetId="2" r:id="rId2"/>'
+    + '</sheets></workbook>'
+  const rels = '<Relationships xmlns="urn:rels">'
+    + '<Relationship Id="rId1" Type="urn:ws" Target="worksheets/sheet1.xml"/>'
+    + '<Relationship Id="rId2" Type="urn:ws" Target="/xl/worksheets/sheet2.xml"/>'
+    + '</Relationships>'
+  // A rich shared string is its runs, not the whitespace between them.
+  const shared = '<sst xmlns="urn:x"><si><t>姓名</t></si><si><r><t>A</t></r><r><t>B</t></r></si></sst>'
+  const styles = '<styleSheet xmlns="urn:x"><numFmts count="1">'
+    + '<numFmt numFmtId="164" formatCode="yyyy&quot;年&quot;m&quot;月&quot;"/></numFmts>'
+    + '<cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="14"/><xf numFmtId="164"/></cellXfs>'
+    + '</styleSheet>'
+  const sheet1 = '<worksheet xmlns="urn:x"><sheetData>'
+    + '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>'
+    + '<row r="2"><c r="A2" t="s"><v>0</v></c><c r="B2"><v>42.5</v></c>'
+    + '<c r="C2" s="1"><v>45000</v></c><c r="D2" s="2"><v>45000</v></c>'
+    + '<c r="E2" t="b"><v>1</v></c></row>'
+    + '<row r="4"><c r="A4" t="inlineStr"><is><t>inline</t></is></c></row>'
+    + '</sheetData></worksheet>'
+  const sheet2 = '<worksheet xmlns="urn:x"><sheetData>'
+    + '<row r="1"><c r="A1" t="str"><v>=1+1</v></c></row>'
+    + '</sheetData></worksheet>'
+
+  const read = await readSheet(zip([
+    { name: 'xl/workbook.xml', data: new TextEncoder().encode(workbook) },
+    { name: 'xl/_rels/workbook.xml.rels', data: new TextEncoder().encode(rels) },
+    { name: 'xl/sharedStrings.xml', data: new TextEncoder().encode(shared) },
+    { name: 'xl/styles.xml', data: new TextEncoder().encode(styles) },
+    { name: 'xl/worksheets/sheet1.xml', data: new TextEncoder().encode(sheet1) },
+    { name: 'xl/worksheets/sheet2.xml', data: new TextEncoder().encode(sheet2) },
+  ]))
+
+  assert.equal(read.kind, 'sheet')
+  assert.deepEqual(read.sheets.map(sheet => sheet.name), ['数据', 'More'])
+  const [first, second] = read.sheets
+  // A shared string is followed by index, a rich one joins its runs, a number is
+  // its own text, and a boolean is TRUE/FALSE.
+  assert.deepEqual(first.rows[0], { number: 1, cells: ['姓名', 'AB'] })
+  // A date is a number with a date format: built-in 14 and a custom code both
+  // become the day they mean. 45000 is 2023-03-15 on Excel's calendar.
+  assert.deepEqual(first.rows[1], {
+    number: 2,
+    cells: ['姓名', '42.5', '2023-03-15', '2023-03-15', 'TRUE'],
+  })
+  // A row the sheet skips keeps its number, so a cell's row is the file's row.
+  assert.deepEqual(first.rows[2], { number: 3, cells: [] })
+  assert.deepEqual(first.rows[3], { number: 4, cells: ['inline'] })
+  // A worksheet named by an absolute target resolves the same way.
+  assert.deepEqual(second.rows, [{ number: 1, cells: ['=1+1'] }])
+  assert.equal(second.name, 'More')
+
+  await assert.rejects(readSheet(zip([{ name: 'a.txt', data: new Uint8Array([1]) }])), /not a workbook/)
+})
+
+test('a deck is read as an outline of itself, in presentation order', async () => {
+  const registration = await loadClientFactory()
+  const { readSlides, zip } = registration.factory(stubRequire())
+
+  const presentation = '<p:presentation xmlns:p="urn:p" xmlns:r="urn:r"><p:sldIdLst>'
+    + '<p:sldId id="256" r:id="rId2"/><p:sldId id="257" r:id="rId3"/>'
+    + '</p:sldIdLst></p:presentation>'
+  // The relationship order is deliberately the reverse of the deck's, because
+  // the slide list is what decides what comes first.
+  const rels = '<Relationships xmlns="urn:rels">'
+    + '<Relationship Id="rId2" Type="urn:slide" Target="slides/slide2.xml"/>'
+    + '<Relationship Id="rId3" Type="urn:slide" Target="slides/slide1.xml"/>'
+    + '</Relationships>'
+  const titleSlide = '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><p:cSld><p:spTree>'
+    + '<p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>'
+    + '<p:txBody><a:p><a:r><a:t>封面</a:t></a:r></a:p></p:txBody></p:sp>'
+    + '</p:spTree></p:cSld></p:sld>'
+  const contentSlide = '<p:sld xmlns:p="urn:p" xmlns:a="urn:a"><p:cSld><p:spTree>'
+    + '<p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>'
+    + '<p:txBody><a:p><a:r><a:t>架构</a:t></a:r></a:p></p:txBody></p:sp>'
+    + '<p:sp><p:nvSpPr><p:nvPr/></p:nvSpPr><p:txBody>'
+    + '<a:p><a:r><a:t>第一点</a:t></a:r></a:p>'
+    + '<a:p><a:r><a:t>第二</a:t></a:r><a:br/><a:r><a:t>点</a:t></a:r></a:p>'
+    + '</p:txBody></p:sp>'
+    + '<p:pic><p:blipFill><a:blip r:embed="rId1"/></p:blipFill></p:pic>'
+    + '</p:spTree></p:cSld></p:sld>'
+  const slideRels = '<Relationships xmlns="urn:rels">'
+    + '<Relationship Id="rId1" Type="urn:image" Target="../media/image1.png"/>'
+    + '</Relationships>'
+
+  const read = await readSlides(zip([
+    { name: 'ppt/presentation.xml', data: new TextEncoder().encode(presentation) },
+    { name: 'ppt/_rels/presentation.xml.rels', data: new TextEncoder().encode(rels) },
+    { name: 'ppt/slides/slide1.xml', data: new TextEncoder().encode(contentSlide) },
+    { name: 'ppt/slides/slide2.xml', data: new TextEncoder().encode(titleSlide) },
+    { name: 'ppt/slides/_rels/slide1.xml.rels', data: new TextEncoder().encode(slideRels) },
+    { name: 'ppt/media/image1.png', data: new Uint8Array([137, 80, 78, 71]) },
+  ]))
+
+  assert.equal(read.kind, 'slides')
+  assert.equal(read.slides.length, 2)
+  // The first slide the deck shows is the one its slide list names first.
+  assert.deepEqual(read.slides[0], { title: '封面', lines: [], images: [] })
+  assert.deepEqual(read.slides[1].title, '架构')
+  // A body shape's paragraphs are the text; each paragraph is one line, and a
+  // break inside one starts another.
+  assert.deepEqual(read.slides[1].lines, ['第一点', '第二', '点'])
+  assert.deepEqual(read.slides[1].images, ['data:image/png;base64,iVBORw=='])
+
+  await assert.rejects(
+    readSlides(zip([{ name: 'a.txt', data: new Uint8Array([1]) }])),
+    /not a presentation/,
+  )
+})
+
+test('a document with more in it than the pane shows says so', async () => {
+  const registration = await loadClientFactory()
+  const { readSheet, readWord, zip } = registration.factory(stubRequire())
+
+  // An empty document is a document, not a failure.
+  const empty = await readWord(zip([
+    {
+      name: 'word/document.xml',
+      data: new TextEncoder().encode('<w:document xmlns:w="urn:w"><w:body/></w:document>'),
+    },
+  ]))
+  assert.deepEqual(empty, { kind: 'word', blocks: [], truncated: false })
+
+  // A workbook with more sheets than the reader shows is cut, and says so
+  // rather than growing with the file.
+  const sheets = Array.from({ length: 12 }, (_value, index) =>
+    `<sheet name="S${index}" sheetId="${index}" r:id="rId"/>`)
+  const read = await readSheet(zip([
+    {
+      name: 'xl/workbook.xml',
+      data: new TextEncoder().encode(
+        `<workbook xmlns="urn:x" xmlns:r="urn:r"><sheets>${sheets.join('')}</sheets></workbook>`),
+    },
+    {
+      name: 'xl/_rels/workbook.xml.rels',
+      data: new TextEncoder().encode(
+        '<Relationships xmlns="urn:r"><Relationship Id="rId" Type="urn:ws" Target="worksheets/sheet1.xml"/></Relationships>'),
+    },
+    {
+      name: 'xl/worksheets/sheet1.xml',
+      data: new TextEncoder().encode(
+        '<worksheet xmlns="urn:x"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>'),
+    },
+  ]))
+  assert.equal(read.sheets.length, 8)
+  assert.equal(read.truncated, true)
+  assert.deepEqual(read.sheets[0].rows, [{ number: 1, cells: ['1'] }])
 })
 
 test('tab labels disambiguate only the basenames that clash', async () => {

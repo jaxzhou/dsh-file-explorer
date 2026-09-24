@@ -18,7 +18,9 @@
 import type { BoundActions } from '@deepseek-ai/dsh-client-store'
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { previewFormatFor } from './format.ts'
+import { bytesOfDataUrl } from './export/pdf.ts'
+import { downloadBlob } from './export/index.ts'
+import { previewFormatFor, readsAllBytes } from './format.ts'
 import { MAX_ASSET_BYTES } from './markdown-assets.ts'
 import type { PreviewText, createFilesStore } from './store.ts'
 
@@ -40,8 +42,8 @@ export interface FilesInjected {
    */
   readonly list: (path: string) => void
   /**
-   * Read one open tab into the store: a page of text, or complete bytes when the
-   * file's format draws an image.
+   * Read one open tab into the store: a page of text, or the file's complete
+   * bytes when its format draws an image, a PDF, or an Office document.
    * @param path - absolute file path of an open tab.
    */
   readonly read: (path: string) => void
@@ -61,6 +63,15 @@ export interface FilesInjected {
    * @param signal - the requesting document's lifetime; aborting abandons the read.
    */
   readonly readText: (path: string, signal: AbortSignal) => Promise<string | undefined>
+  /**
+   * Save one file to the reader's downloads — the file itself, not a conversion
+   * of it, so this is the one control that works for every kind of file.
+   * @param path - absolute file path.
+   * @param name - the file's name, which becomes the download's name.
+   * @returns when the download has been handed to the browser.
+   * @throws when the file cannot be read, naming why.
+   */
+  readonly download: (path: string, name: string) => Promise<void>
 }
 
 /**
@@ -110,8 +121,9 @@ export function filesFace(
         if (signal.aborted || readGenerations.get(path) !== generation) return
         write()
       }
-      // An image needs its bytes whole; everything else needs a page of lines,
-      // because the source view can show a bounded prefix of any text file.
+      // A picture and a document need their bytes whole; everything else needs a
+      // page of lines, because the source view can show a bounded prefix of any
+      // text file.
       if (format.kind === 'image') {
         void remote.workspaceFiles.readAll(sessionId, path, signal).then((result) => {
           settle(() => {
@@ -120,6 +132,28 @@ export function filesFace(
                 kind: 'image',
                 image: {
                   dataUrl: `data:${format.mediaType};base64,${result.value.data}`,
+                  bytes: result.value.bytes,
+                },
+              })
+            } else {
+              actions.previewFailed(path, result.error)
+            }
+          })
+        })
+        return
+      }
+      // A PDF and an Office package are drawn from the file itself, so the read
+      // is the whole file — bounded by the deployment's complete-read cap, whose
+      // refusal reaches the pane as any other read failure does.
+      if (readsAllBytes(format)) {
+        void remote.workspaceFiles.readAll(sessionId, path, signal).then((result) => {
+          settle(() => {
+            if (result.ok) {
+              actions.previewLoaded(path, {
+                kind: 'file',
+                file: {
+                  data: result.value.data,
+                  mediaType: format.mediaType ?? 'application/octet-stream',
                   bytes: result.value.bytes,
                 },
               })
@@ -170,6 +204,16 @@ export function filesFace(
         const raw = new Uint8Array(binary.length)
         for (let index = 0; index < binary.length; index++) raw[index] = binary.charCodeAt(index)
         return new TextDecoder().decode(raw)
+      })
+    },
+    download(path, name) {
+      const format = previewFormatFor(path)
+      const mediaType = format.mediaType ?? 'application/octet-stream'
+      return remote.workspaceFiles.readAll(sessionId, path, signal).then((result) => {
+        if (!result.ok) throw new Error(result.error.message)
+        const bytes = bytesOfDataUrl(`data:${mediaType};base64,${result.value.data}`)
+        if (bytes === undefined) throw new Error('the file could not be decoded')
+        downloadBlob(new Blob([bytes], { type: mediaType }), name)
       })
     },
   }

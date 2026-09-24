@@ -37,11 +37,16 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { JsonTreeLabels, MarkdownLabels } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
-import { canExportPdf, hasSourceToggle, previewFormatFor } from './format.ts'
+import { canExportPdf, hasSourceToggle, officeKindOf, previewFormatFor } from './format.ts'
 import { exportDocument, type ExportFormat } from './export/index.ts'
+import { LegacyOfficePanel, OfficePreview, PdfPreview } from './DocumentPreview.tsx'
 import type { PreviewFormat } from './format.ts'
 import type { FilesInjected } from './face.ts'
 import { relativeImageDestinations, resolveRelativePath } from './markdown-assets.ts'
+import {
+  findMermaidFences, mermaidDestination, mermaidErrorMessage, renderMermaidPng,
+  replaceMermaidFences,
+} from './mermaid.ts'
 import type {
   FilesState, LevelState, PreviewContent, PreviewMode, PreviewState, PreviewText,
   createFilesStore,
@@ -384,13 +389,31 @@ function cacheAsset(path: string, dataUrl: string): void {
   }
 }
 
+/** What one ```mermaid fence in the open document is doing right now. */
+type DiagramState =
+  | { readonly kind: 'pending' }
+  | { readonly kind: 'ready'; readonly dataUrl: string }
+  | { readonly kind: 'failed'; readonly message: string }
+
 /**
- * A Markdown document with the images it references read from the workspace.
+ * A Markdown document with the images it references read from the workspace, and
+ * its ```mermaid fences drawn as diagrams.
  *
  * The primitive resolves local destinations synchronously through `pathImages`,
- * so the reads happen first and the document renders with whatever arrived — a
- * reference with no answer stays inert alt text, exactly as it does for a
- * destination this reader never resolves.
+ * so the reads and the drawings happen first and the document renders with
+ * whatever arrived — a reference with no answer stays inert alt text, exactly as
+ * it does for a destination this reader never resolves.
+ *
+ * A diagram is drawn to a PNG and handed to the primitive as an image, which is
+ * what keeps the document one document: the fence is replaced by one image
+ * reference, so tables, footnotes and list numbering around it are parsed
+ * exactly as they were written. The same `<img>` is what the PDF rasteriser
+ * draws and what the Word writer embeds, so an exported document carries the
+ * diagram as a picture without either writer knowing mermaid exists.
+ *
+ * A diagram that cannot be drawn keeps its source: the failure is named in a
+ * quote above the fence, because a preview that silently drops a diagram reads
+ * as a document that had none.
  */
 function RenderedMarkdown({
   text,
@@ -398,6 +421,7 @@ function RenderedMarkdown({
   readImage,
   labels,
   proseRef,
+  t,
 }: {
   text: string
   /** Absolute directory holding the document, which its destinations resolve against. */
@@ -405,9 +429,12 @@ function RenderedMarkdown({
   readImage: FilesInjected['readImage']
   labels: MarkdownLabels
   proseRef: MutableRefObject<HTMLDivElement | null>
+  t: TranslateNS<'fileExplorer'>
 }): ReactNode {
   const destinations = useMemo(() => relativeImageDestinations(text), [text])
   const [assets, setAssets] = useState<Readonly<Record<string, string>>>({})
+  const fences = useMemo(() => findMermaidFences(text), [text])
+  const [diagrams, setDiagrams] = useState<readonly DiagramState[]>([])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -430,15 +457,67 @@ function RenderedMarkdown({
     return () => { controller.abort() }
   }, [destinations, directory, readImage])
 
+  // Diagrams are drawn one at a time and each settlement reaches the document on
+  // its own, so a long document shows its first diagram while the rest are still
+  // being laid out.
+  useEffect(() => {
+    if (fences.length === 0) {
+      setDiagrams([])
+      return
+    }
+    const controller = new AbortController()
+    const settle = (index: number, state: DiagramState): void => {
+      if (controller.signal.aborted) return
+      setDiagrams(current => current.map((existing, at) => (at === index ? state : existing)))
+    }
+    setDiagrams(fences.map((): DiagramState => ({ kind: 'pending' })))
+    fences.forEach((fence, index) => {
+      void renderMermaidPng(fence.code, controller.signal).then(
+        dataUrl => { settle(index, { kind: 'ready', dataUrl }) },
+        (error: unknown) => { settle(index, { kind: 'failed', message: mermaidErrorMessage(error) }) },
+      )
+    })
+    return () => { controller.abort() }
+  }, [fences])
+
+  // The fences are replaced, not removed: everything the author wrote around one
+  // survives, and a failed diagram keeps its own source underneath the failure.
+  const rewritten = useMemo(() => replaceMermaidFences(text, fences, (fence, index) => {
+    const state = diagrams[index]
+    if (state?.kind === 'ready') return `![${t('mermaid.label')}](${mermaidDestination(index)})`
+    if (state?.kind === 'failed') {
+      return `> ${t('mermaid.failed', { message: state.message })}\n\n${fence.source}`
+    }
+    return `![${t('mermaid.loading')}](${mermaidDestination(index)})`
+  }), [text, fences, diagrams, t])
+
+  // Which placeholder destination belongs to which diagram. A document cannot
+  // name one of these itself without colliding, which is the point of the
+  // reserved prefix.
+  const diagramAt = useMemo(
+    () => new Map(fences.map((_, index) => [mermaidDestination(index), index] as const)),
+    [fences],
+  )
+
   // One identity per settled set: a fresh object each render would discard the
   // primitive's parse memo.
   const pathImages = useMemo(
-    () => ({ resolve: (value: string) => assets[value] }),
-    [assets],
+    () => ({
+      resolve: (value: string) => {
+        const index = diagramAt.get(value)
+        if (index === undefined) return assets[value]
+        const state = diagrams[index]
+        // A diagram still being drawn resolves to nothing, which is the
+        // primitive's own "inert" arm: the reader sees the placeholder label
+        // until the drawing lands.
+        return state?.kind === 'ready' ? state.dataUrl : undefined
+      },
+    }),
+    [assets, diagramAt, diagrams],
   )
   return (
     <div className="dsh-fe-prose" ref={proseRef} data-preview-format="markdown">
-      <MarkdownText text={text} labels={labels} pathImages={pathImages} />
+      <MarkdownText text={rewritten} labels={labels} pathImages={pathImages} />
     </div>
   )
 }
@@ -514,6 +593,7 @@ function FormattedBody({
         readImage={readImage}
         labels={markdownLabels}
         proseRef={proseRef}
+        t={t}
       />
     )
   }
@@ -539,7 +619,7 @@ function FormattedBody({
 }
 
 /** Which body a tab is drawing, which is also which controls apply. */
-type PreviewBodyKind = 'rendered' | 'source' | 'image'
+type PreviewBodyKind = 'rendered' | 'source' | 'image' | 'pdf' | 'office' | 'legacy'
 
 /**
  * Resolve the body a file's format and the tab's mode choice agree on.
@@ -556,12 +636,33 @@ function bodyKindOf(
   jsonWalkable: boolean,
 ): PreviewBodyKind {
   if (content !== null && content.kind === 'image') return 'image'
+  // A format this pane refuses to draw says why, and says it before anything is
+  // read: there is no failure to report, only a document it will not open.
+  if (format.kind === 'legacyOffice') return 'legacy'
+  if (content !== null && content.kind === 'file') return format.kind === 'pdf' ? 'pdf' : 'office'
   if (!hasSourceToggle(format)) return 'source'
   if ((mode ?? 'rendered') === 'source') return 'source'
   // JSON the tree cannot walk falls back to its source, so the controls offer the
   // body that is actually on screen.
   if (format.kind === 'json' && !jsonWalkable) return 'source'
   return 'rendered'
+}
+
+/**
+ * The line of facts the pane's header shows about one settled read.
+ * @param content - what the read delivered.
+ * @param t - the pane's translate.
+ * @returns the line, or null when the read reported nothing to say.
+ */
+function previewMeta(content: PreviewContent, t: TranslateNS<'fileExplorer'>): string | null {
+  if (content.kind === 'text') {
+    return [
+      t('preview.lines', { lines: content.page.lines }),
+      content.page.bytes === undefined ? null : fileSizeText(content.page.bytes),
+    ].filter(part => part !== null).join(' · ')
+  }
+  const bytes = content.kind === 'image' ? content.image.bytes : content.file.bytes
+  return bytes === undefined ? null : fileSizeText(bytes)
 }
 
 /**
@@ -601,6 +702,16 @@ function PreviewBody({
         <img className="dsh-fe-image" src={content.image.dataUrl} alt={name} data-preview-image />
       </div>
     )
+  }
+  // A PDF and an Office package are drawn from the file itself; each body brings
+  // its own scrollport, because a PDF fills the pane and a document has to.
+  if (content.kind === 'file') {
+    const { name } = pathParts(path)
+    if (format.kind === 'pdf') return <PdfPreview file={content.file} name={name} t={t} />
+    const kind = officeKindOf(format)
+    return kind === undefined
+      ? null
+      : <OfficePreview key={path} kind={kind} file={content.file} t={t} />
   }
   const page = content.page
   const lines = previewLines(page)
@@ -658,7 +769,7 @@ function PreviewBody({
  * @returns the two-pane explorer.
  */
 export function FilesView({
-  sessionId, useSessions, useStore, actions, list, read, readImage, readText, t,
+  sessionId, useSessions, useStore, actions, list, read, readImage, readText, download, t,
 }: FilesViewProps): ReactNode {
   const cwd = useSessions(sessions => sessions.byId[sessionId]?.cwd)
   const state = useStore(store => store)
@@ -674,6 +785,8 @@ export function FilesView({
   const [exporting, setExporting] = useState(false)
   /** Why the last export could not be written. */
   const [exportError, setExportError] = useState<string | null>(null)
+  /** Why the last download could not be read. */
+  const [downloadError, setDownloadError] = useState<string | null>(null)
 
   useEffect(() => () => {
     if (copyTimer.current !== null) clearTimeout(copyTimer.current)
@@ -709,6 +822,9 @@ export function FilesView({
    */
   useEffect(() => {
     if (active === null) return
+    // A legacy binary document is never read: the pane says why it will not draw
+    // it rather than reading bytes the host would refuse to decode as text.
+    if (previewFormatFor(active).kind === 'legacyOffice') return
     if (state.previews[active] !== undefined) return
     read(active)
   }, [active, read, state.previews])
@@ -762,6 +878,22 @@ export function FilesView({
     })
   }
   /**
+   * Save the active tab's file to the reader's downloads.
+   *
+   * The file itself, not a conversion of it — which makes this the one control
+   * that works for every kind of file the tree can list, including the ones this
+   * pane declines to draw.
+   */
+  const downloadActive = (): void => {
+    if (active === null) return
+    setDownloadError(null)
+    void download(active, pathParts(active).name).catch((error: unknown) => {
+      // A download that never arrives is the one outcome a reader cannot
+      // diagnose, so what went wrong is said where the export's failure is.
+      setDownloadError(error instanceof Error ? error.message : String(error))
+    })
+  }
+  /**
    * Export the rendered body as a file, and download it.
    *
    * Markdown is read from the live document node, so the Word file and the PDF
@@ -806,16 +938,7 @@ export function FilesView({
     && jsonDocument === undefined
     && content !== null
     && content.kind === 'text'
-  const meta = content === null
-    ? null
-    : content.kind === 'text'
-      ? [
-        t('preview.lines', { lines: content.page.lines }),
-        content.page.bytes === undefined ? null : fileSizeText(content.page.bytes),
-      ].filter(part => part !== null).join(' · ')
-      : content.image.bytes === undefined
-        ? null
-        : fileSizeText(content.image.bytes)
+  const meta = content === null ? null : previewMeta(content, t)
 
   return (
     <div
@@ -908,6 +1031,18 @@ export function FilesView({
                 {copied === active ? t('preview.copied') : t('preview.copy')}
               </button>
             )}
+            {active !== null && (
+              <button
+                type="button"
+                className="dsh-fe-tool"
+                aria-label={t('preview.download')}
+                title={t('preview.download')}
+                data-preview-download
+                onClick={downloadActive}
+              >
+                {t('preview.download')}
+              </button>
+            )}
             {active !== null && format !== null && hasSourceToggle(format) && (
               <button
                 type="button"
@@ -988,7 +1123,16 @@ export function FilesView({
               {t('export.failed', { message: exportError })}
             </p>
           )}
-          {active !== null && (preview === undefined || preview.kind === 'loading') && (
+          {downloadError !== null && (
+            <p className="dsh-fe-note dsh-fe-note-error" data-preview-download-error>
+              {t('preview.downloadFailed', { message: downloadError })}
+            </p>
+          )}
+          {active !== null && format !== null && format.kind === 'legacyOffice' && (
+            <LegacyOfficePanel t={t} />
+          )}
+          {active !== null && format?.kind !== 'legacyOffice'
+            && (preview === undefined || preview.kind === 'loading') && (
             <div className="dsh-fe-status">{t('preview.loading')}</div>
           )}
           {active !== null && preview?.kind === 'failed' && (

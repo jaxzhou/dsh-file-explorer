@@ -13,7 +13,9 @@
  */
 
 /** The display a file's contents get. */
-export type PreviewFormatKind = 'markdown' | 'html' | 'json' | 'code' | 'image' | 'text'
+export type PreviewFormatKind
+  = 'markdown' | 'html' | 'json' | 'code' | 'image' | 'text'
+    | 'pdf' | 'word' | 'sheet' | 'slides' | 'legacyOffice'
 
 /** One file's preview format. */
 export interface PreviewFormat {
@@ -21,7 +23,7 @@ export interface PreviewFormat {
   readonly kind: PreviewFormatKind
   /** Grammar hint for the highlighted source view; absent when no grammar is known. */
   readonly lang: string | undefined
-  /** Media type the read bytes are labelled with; present only for `image`. */
+  /** Media type the file's own bytes carry, when its suffix says so. */
   readonly mediaType: string | undefined
 }
 
@@ -40,6 +42,28 @@ const IMAGE_MEDIA_TYPES = new Map<string, string>([
   // An SVG draws as an image here; `<img>` neither runs its scripts nor lets it
   // reach the application origin, so the markup stays inert.
   ['svg', 'image/svg+xml'],
+])
+
+/**
+ * Suffix → document format, for the files whose preview needs the whole file
+ * rather than a page of text: a PDF and the three OOXML packages, plus the
+ * legacy binary formats, which are recognised only so the pane can say why it
+ * will not draw them instead of reporting a binary file as unreadable text.
+ */
+const DOCUMENT_MEDIA_TYPES = new Map<string, { kind: PreviewFormatKind; mediaType: string }>([
+  ['pdf', { kind: 'pdf', mediaType: 'application/pdf' }],
+  ['docx', { kind: 'word', mediaType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }],
+  ['docm', { kind: 'word', mediaType: 'application/vnd.ms-word.document.macroEnabled.12' }],
+  ['xlsx', { kind: 'sheet', mediaType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }],
+  ['xlsm', { kind: 'sheet', mediaType: 'application/vnd.ms-excel.sheet.macroEnabled.12' }],
+  ['pptx', { kind: 'slides', mediaType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }],
+  ['pptm', { kind: 'slides', mediaType: 'application/vnd.ms-powerpoint.presentation.macroEnabled.12' }],
+  // The formats before OOXML are OLE compound files, not packages; reading one
+  // means a second container format and a second document model, for documents
+  // a browser preview could not lay out anyway.
+  ['doc', { kind: 'legacyOffice', mediaType: 'application/msword' }],
+  ['xls', { kind: 'legacyOffice', mediaType: 'application/vnd.ms-excel' }],
+  ['ppt', { kind: 'legacyOffice', mediaType: 'application/vnd.ms-powerpoint' }],
 ])
 
 /**
@@ -104,6 +128,8 @@ export function previewFormatFor(path: string): PreviewFormat {
   const extension = extensionOf(path)
   const mediaType = extension === undefined ? undefined : IMAGE_MEDIA_TYPES.get(extension)
   if (mediaType !== undefined) return { kind: 'image', lang: undefined, mediaType }
+  const document = extension === undefined ? undefined : DOCUMENT_MEDIA_TYPES.get(extension)
+  if (document !== undefined) return { kind: document.kind, lang: undefined, mediaType: document.mediaType }
   const lang = extension === undefined ? undefined : GRAMMAR_BY_EXTENSION.get(extension)
   if (lang === undefined) return { kind: 'text', lang: undefined, mediaType: undefined }
   if (lang === 'json') return { kind: 'json', lang, mediaType: undefined }
@@ -112,6 +138,34 @@ export function previewFormatFor(path: string): PreviewFormat {
   if (lang === 'markdown') return { kind: 'markdown', lang, mediaType: undefined }
   if (lang === 'html') return { kind: 'html', lang, mediaType: undefined }
   return { kind: 'code', lang, mediaType: undefined }
+}
+
+/**
+ * Whether a format's preview is built from the file's complete bytes.
+ *
+ * A picture, a PDF and an Office package are not readable as a page of lines, so
+ * the read that fills their tab asks for the whole file — which is why the file
+ * size that read can carry is the one the deployment sets for a complete read.
+ * @param format - the file's format.
+ * @returns whether the read is a complete-file read.
+ */
+export function readsAllBytes(format: PreviewFormat): boolean {
+  switch (format.kind) {
+    case 'image': case 'pdf': case 'word': case 'sheet': case 'slides': return true
+    default: return false
+  }
+}
+
+/**
+ * Which Office package one format names.
+ * @param format - the file's format.
+ * @returns the package kind, or undefined when it is not an OOXML document.
+ */
+export function officeKindOf(format: PreviewFormat): 'word' | 'sheet' | 'slides' | undefined {
+  switch (format.kind) {
+    case 'word': case 'sheet': case 'slides': return format.kind
+    default: return undefined
+  }
 }
 
 /**

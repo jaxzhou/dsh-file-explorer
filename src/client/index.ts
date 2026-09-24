@@ -35,13 +35,31 @@ import { createFilesStore } from './store.ts'
 import { installStyles } from './styles.ts'
 
 export { parseJsonDocument, previewLines, tabLabels } from './FilesView.tsx'
-export { canExportPdf, extensionOf, hasSourceToggle, previewFormatFor } from './format.ts'
+export {
+  canExportPdf, extensionOf, hasSourceToggle, officeKindOf, previewFormatFor, readsAllBytes,
+} from './format.ts'
 export {
   MAX_ASSET_BYTES, MAX_DOCUMENT_IMAGES, relativeImageDestinations, resolveRelativePath,
 } from './markdown-assets.ts'
+// The fence scan and the rewrite are pure text work, so the contract tests reach
+// them through the built bundle the same way they reach the format table.
+export {
+  findMermaidFences, mermaidDestination, mermaidErrorMessage, replaceMermaidFences,
+} from './mermaid.ts'
+export type { MermaidFence } from './mermaid.ts'
 // The export writers are pure byte producers, so they are reachable from outside
 // the plugin: the contract tests parse what they write, which is the only way to
 // check a file format without opening the file in an application.
+//
+// The Office readers are reachable for the same reason, and they are what makes
+// the writers *checkable*: a document written and read back is a round trip, and
+// a round trip is a test that does not need Word to run.
+export { openZip } from './office/zip.ts'
+export { readOfficeDocument } from './office/index.ts'
+export { readWord } from './office/word.ts'
+export { readSheet } from './office/sheet.ts'
+export { readSlides } from './office/slides.ts'
+export { attribute, descendants, elements, parseXml, textContent } from './office/xml.ts'
 export { bytesOfDataUrl, pdfFromPages, A4_HEIGHT_PT, A4_WIDTH_PT } from './export/pdf.ts'
 export type { PdfPage } from './export/pdf.ts'
 export { crc32, zip } from './export/zip.ts'
@@ -50,10 +68,16 @@ export { docxFromBlocks } from './export/docx.ts'
 export type { Block, InlineRun } from './export/model.ts'
 export type { PreviewFormat, PreviewFormatKind } from './format.ts'
 export type { FileExplorerKey } from './locales.ts'
+export type { OfficeDocument, OfficeKind, SheetTable, SlideContent } from './office/index.ts'
+export type { WordDocument } from './office/word.ts'
+export type { SheetDocument } from './office/sheet.ts'
+export type { SlidesDocument } from './office/slides.ts'
+export type { XmlElement } from './office/xml.ts'
+export type { ZipArchive } from './office/zip.ts'
 export { RETAINED_PREVIEWS } from './store.ts'
 export type {
-  DirLevel, FilesState, LevelState, PreviewContent, PreviewImage, PreviewMode, PreviewState,
-  PreviewText,
+  DirLevel, FilesState, LevelState, PreviewContent, PreviewFile, PreviewImage, PreviewMode,
+  PreviewState, PreviewText,
 } from './store.ts'
 export type { FilesInjected, WorkspaceFilesRemote } from './face.ts'
 export type { FilesViewProps } from './FilesView.tsx'
