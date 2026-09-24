@@ -10,8 +10,9 @@ English | [中文](README.zh.md)
 
 A **Files** tab for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness),
 beside **Chat** and **Trajectory**: the session workspace as a tree, and a preview
-that adapts to what the file is — rendered Markdown, a JSON tree, highlighted
-source, an image, or plain text. Read-only, no configuration, nothing stored.
+that adapts to what the file is — rendered Markdown with its diagrams, a page of
+HTML, a JSON tree, highlighted source, an image, a PDF, or an unpacked Word, Excel
+or PowerPoint document. Read-only, no configuration, nothing stored.
 
 ```sh
 dsh plugin --profile web add @jaxzhou/dsh-file-explorer
@@ -21,13 +22,17 @@ dsh --profile web
 ## Demo
 
 [![The Files tab beside Chat and Trajectory: a workspace tree on the left, and a
-rendered Markdown document on the right whose toolbar carries Copy, Source and
-Export PDF](media/demo.gif)](media/demo.mp4)
+rendered Markdown document on the right](media/demo.gif)](media/demo.mp4)
 
 *15 seconds — click for the full-quality MP4.* A primary-school maths workspace: a
 lesson document rendered with its tables, the **Source** toggle showing the
-Markdown behind it, a second document open beside it in its own tab, and **Export
-PDF**, which hands the page to the browser's print dialog.
+Markdown behind it, a second document open beside it in its own tab, and an export
+of it to PDF.
+
+**The recording is an older build than the list below.** It predates Mermaid
+diagrams, the PDF and Office previews and the pane's **Download** control, and it
+still shows an export handing the page to the browser's print dialog — which no
+export does now.
 
 ## What you get
 
@@ -44,17 +49,30 @@ The right pane picks each tab's body from the file:
 
 | Category | Preview |
 |---|---|
-| **Markdown** | Rendered GFM — headings, tables, task lists, quotes, math, footnotes, images referenced beside the file, highlighted code fences — with a **Source** toggle and an **Export** menu |
+| **Markdown** | Rendered GFM — headings, tables, task lists, quotes, math, footnotes, images referenced beside the file, highlighted code fences, and **Mermaid diagrams** — with a **Source** toggle and an **Export** menu |
 | **HTML** | Drawn as a page in a sandboxed frame: the file's own CSS applies, and its scripts run in an opaque origin that cannot reach this application. With a **Source** toggle and an **Export** menu |
 | **JSON** | A collapsible tree with per-value copy, and the same toggle |
 | **Source code** | Syntax highlighting, line numbers, and a copy button for 24 grammars: TypeScript/JavaScript, shell, Python, Ruby, Go, Rust, Java, C, C++, C#, Kotlin, Swift, PHP, YAML, TOML, INI, HTML, CSS, SCSS, Less, SQL, XML, Lua, MDX |
 | **Images** | PNG, JPEG, GIF, WebP, AVIF, BMP, ICO and SVG, drawn to the pane. An SVG goes through `<img>`, so its scripts never run |
-| **Anything else** | Numbered plain text — an unmapped suffix (`.vue`, `.proto`, `.txt`) stays plain rather than guessing a wrong grammar |
+| **PDF** | Drawn by the browser's own PDF reader, from the file's bytes — so its text is real text |
+| **Word, Excel, PowerPoint** | `.docx`, `.xlsx` and `.pptx` unpacked in the page: a document's headings, lists, tables, pictures and code; a workbook's sheets as a grid, with the dates it stores as numbers shown as dates; a deck's slides as an outline of their text and pictures |
+| **Anything else** | Numbered plain text — an unmapped suffix (`.vue`, `.proto`, `.txt`) stays plain rather than guessing a wrong grammar. The legacy binary Office formats (`.doc`, `.xls`, `.ppt`) are not previewed: the pane says so and offers the download |
+
+A **Mermaid** code fence (` ```mermaid `) is a diagram, not source, so the pane
+draws it: flowcharts, sequence diagrams, state, class, ER, gantt, pie and the
+rest of what Mermaid 11 understands. The drawing is a picture everywhere it
+appears — the preview, the PDF page, and the Word document all carry the same
+image — so what you see is what exports. A diagram Mermaid cannot parse keeps its
+source, with the failure named above it.
 
 Text previews wrap at their spaces and keep every word whole; an image reads its
-complete bytes. Every text body carries a **Copy** control in the pane's toolbar,
-which copies the file's own text — a rendered Markdown document copies its
-Markdown source.
+complete bytes.
+
+Every preview carries **Download** in the pane's toolbar, which saves the file
+itself — not a conversion of it, which is why it is the one control that works for
+every kind of file, including the ones this pane will not draw. Every text body
+carries **Copy**, which copies the file's own text — a rendered Markdown document
+copies its Markdown source.
 
 A rendered Markdown or HTML document also carries **Export**, which **downloads a
 file directly** — no print dialog — in either of two formats:
@@ -127,6 +145,11 @@ restart the profile.
   state lives in memory and is discarded with the session.
 - **Inert Host half.** The package's Node side registers no service, tool, prompt
   section, or event.
+- **Diagrams are drawn in the page.** Mermaid is bundled into the plugin and runs
+  locally; drawing a diagram fetches nothing from anywhere.
+- **Office documents are unpacked in the page.** A `.docx`, `.xlsx` or `.pptx` is
+  read here, by this plugin's own reader; nothing about it leaves the browser. A
+  PDF is handed to the browser's reader as a local blob URL.
 - **HTML runs sandboxed.** A previewed page's scripts execute in an opaque origin,
   which cannot read this application's DOM, storage, or session; an exported page
   is printed with its scripts removed. An SVG draws through `<img>`, so its scripts
@@ -158,8 +181,27 @@ restart the profile.
   absolute URLs load there. **An export does resolve them** — the file it writes is
   read from a copy that has been made to stand alone — so a document can export
   with pictures it does not show in the preview.
-- **A PDF's text is a picture.** Nothing in it can be selected or searched. Export
+- **An exported PDF's text is a picture.** Nothing in it can be selected or
+  searched — a *previewed* PDF is the browser's own reader, where it can. Export
   Word instead when the text has to stay text.
+- **A Mermaid diagram is a picture too.** It is drawn once, to a PNG, for the
+  preview and for both exports — so its labels are not selectable, and it is
+  always drawn on white, because a PDF page and a Word document are white and a
+  diagram drawn for a dark pane would be invisible on them. Drawing supports the
+  diagram types Mermaid 11 carries; a malformed one keeps its source and names
+  the failure above it.
+- **An Office preview is content, not layout.** A `.docx` shows its headings,
+  text, lists, tables and pictures; a `.xlsx` shows its cells' values; a `.pptx`
+  shows each slide's text and pictures. What is *not* there is everything that
+  needs a layout engine and the fonts the file names: colours and themes, column
+  widths, page breaks, headers and footers, charts, SmartArt, and animations.
+  Formulas show the value the file cached, not a recalculation.
+- **Only the OOXML formats are read.** `.doc`, `.xls` and `.ppt` are the older
+  binary container, which this pane does not parse — it says so and offers the
+  download instead.
+- **Preview and download are bounded by one complete-file read**, 32 MiB by
+  default in the shipped Web composition. A file above it reports the refusal
+  rather than arriving cut.
 - **Long documents are cut at 60 PDF pages**, and an image past 8 MiB is left out;
   both are stated here because a silent cut reads as a complete export.
 

@@ -58,7 +58,10 @@ numbered gutter, its copy control, and the shiki grammars all come from
 `@deepseek-ai/dsh-client-ui-primitives`, which the shell shares into that table.
 This plugin contributes the format decision and the pane, not a second renderer —
 keep it that way, and add a runtime dependency only with a `dsh.client.external`
-request and a client row that can answer it.
+request and a client row that can answer it. A diagram engine is the one
+deliberate exception, and it is **inlined** rather than requested as an external:
+nothing on the module table answers a Mermaid, so a request for one could not be
+composed.
 
 ## Layout
 
@@ -68,6 +71,11 @@ request and a client row that can answer it.
 | `src/client/index.ts` | Client plugin: stylesheet, dictionaries, and the `conversation.view` registration |
 | `src/client/FilesView.tsx` | The two-pane page: tree, tab strip, headers, and the per-format preview bodies |
 | `src/client/format.ts` | Suffix → preview format, and the grammar/media-type tables |
+| `src/client/markdown-assets.ts` | The relative image destinations a Markdown document names, and where each resolves |
+| `src/client/mermaid.ts` | The ```mermaid fence scan, and drawing one to the PNG the preview and both exports carry |
+| `src/client/export/` | The block model a document exports as, and the PDF, Word and zip writers |
+| `src/client/DocumentPreview.tsx` | The PDF, Word, Excel and PowerPoint bodies |
+| `src/client/office/` | The OOXML readers: the zip container, a small XML reader, and one reader per package |
 | `src/client/store.ts` | The exclusive per-session view store: tree state, open tabs, and the bounded preview content |
 | `src/client/face.ts` | The injected face: Remote listing, paged text reads, and complete-byte image reads |
 | `src/client/styles.ts` | The plugin-owned stylesheet |
@@ -114,17 +122,76 @@ font embedding, so the text stays text — which is the reason to offer Word bes
 raster PDF at all. Formatting is applied directly on runs and paragraphs; there is
 no `styles.xml`, so there is no style-name to get wrong.
 
-**`html2canvas` is the bundle's one dependency**, at ~194 KiB minified, and it is
-imported dynamically so its module body does not run at plugin load. Two build
-consequences: the client bundle is minified now (an unminified inline would be
-1.4 MB), and `trimClientMap` drops third-party sources from the shipped source map,
-which otherwise grows from 93 KiB to 831 KiB.
+**Two dependencies are inlined, and each is imported dynamically** so its module
+body does not run at plugin load: `html2canvas` at ~194 KiB minified, for the PDF
+raster, and `mermaid` at ~3.3 MiB minified, for a diagram. Neither is on the
+shell's module table, so neither may stay external — a bare `require` would throw
+while the plugin materializes — and the single-file loader handoff has no way to
+fetch a second chunk. "Lazy" here means *executed* late, not *downloaded* late:
+the bytes are in `lib/client.js` either way.
+
+Mermaid is why the client bundle is ~3.6 MiB rather than ~250 KB, and that size is
+a deliberate trade, not an accident: bundling is the only way a diagram draws with
+no network, no third-party request, and no Host route. Two build consequences came
+with it — the client bundle is minified (an unminified inline would be ~7.9 MB),
+and `trimClientMap` drops third-party sources from the shipped source map, which
+otherwise grows from 372 KiB to 5.0 MiB.
+
+**A diagram is a PNG, not the SVG mermaid draws.** It has to be: the Word writer
+carries PNG and JPEG only, and the PDF is html2canvas drawing an `<img>`. So
+`renderMermaidPng` rasterises the SVG through an `<img>` onto a canvas, and
+`htmlLabels: false` in the initialize config is what makes that portable — a label
+mermaid renders as `<foreignObject>` does not survive the trip. One raster then
+serves all three consumers: the preview shows an `<img>`, html2canvas draws that
+`<img>` into the PDF, and the Word writer embeds it. The placeholder the fence is
+replaced with is a *relative* image destination on purpose, because that is what
+routes it to the pane's own image vocabulary; that vocabulary is also where the
+`data:` URL is allowed through.
 
 An HTML export is made to stand alone first (`standaloneHtml`): its relative images
 and stylesheets are read through the workspace reader and inlined, because a blob
 document has no base to resolve them against — which is also why the *preview*
 still shows those images missing, and why an export can carry pictures the preview
 does not.
+
+### The Office readers are the writers' other half
+
+Previewing `.docx`, `.xlsx` and `.pptx` costs **no dependency at all**, and that
+is the point of how it is built:
+
+- **The inflater is the browser's.** `office/zip.ts` reads the central directory
+  and hands each deflated entry to `DecompressionStream('deflate-raw')`. A
+  third-party inflate implementation is the only thing a zip reader actually
+  needs one for, and this bundle does not carry one.
+- **The XML reader is a hundred lines because `DOMParser` does not exist in
+  Node.** These parsers have to be testable where the tests run, so `office/xml.ts`
+  parses the narrow dialect OOXML is: well-formed, machine-generated, no DTD.
+  It looks elements up by *local* name, because a prefix is a binding the
+  document declares rather than a name anyone can rely on.
+- **The tests are round trips.** `docxFromBlocks(blocks)` → `readWord(bytes)`
+  compares blocks, which is a stronger check than either side alone. That is why
+  the Word writer now emits `<w:outlineLvl>` on a heading: it is direct
+  formatting, so the package still needs no `styles.xml`, Word reads it as a
+  heading, and the reader finds a heading by the same fact. Lists are *not*
+  round-tripped — the writer types its markers into the text, so a list comes
+  back as a paragraph, and the list path is covered by a hand-written fixture
+  that uses `w:numPr` the way Word does.
+- **The ceiling is content, not layout, and it is deliberate.** Do not "fix" a
+  deck rendering as an outline by adding a layout engine: a faithful slide needs
+  the theme, the fonts, and every shape's geometry, which is a megabyte-scale
+  dependency for a preview pane. What each reader takes is recorded in its own
+  header comment.
+- **Every read is bounded**, so one file cannot pin the tab: blocks, pictures,
+  sheets, rows, columns and slides all have caps, and a reader that hit one
+  reports `truncated` instead of growing.
+- **A PDF is embedded as `<object>`, not `<iframe>`.** The element's own fallback
+  content is then the browser's own "I cannot show this" signal, which is what
+  keeps a browser without a PDF reader from painting an empty rectangle.
+
+Everything a preview reads is a complete-file read, bounded by the deployment's
+`workspaceFiles.maxFileBytes` (32 MiB by default). The **Download** control reads
+through the same path, which is why it works for a file whose format this pane
+does not draw.
 
 ### A `link:` install breaks when the package is renamed
 
@@ -161,9 +228,12 @@ Two more npm facts worth remembering:
 
 ## Regenerating the demo
 
-The committed recording **predates local images in Markdown** — the document it
-shows references `images/*.png`, which then rendered as alt text and now render as
-pictures — so re-record it when that difference would mislead. The README embeds a
+The committed recording is an older build, and the README says so. It predates
+local images in Markdown (it shows `images/*.png` rendering as alt text), Mermaid
+diagrams, the PDF and Office previews, and the pane's **Download** control — and
+it ends on an export handing the page to the browser's print dialog, which no
+export does now. Re-record it when that gap would mislead, and update both
+READMEs' demo sections when you do. The README embeds a
 GIF and links the MP4 beside it. GitHub renders a committed video only on its own
 file page, so the animation is what plays inline; the link is the same recording at
 full quality. `media/` is documentation only — it is outside the package's `files`
