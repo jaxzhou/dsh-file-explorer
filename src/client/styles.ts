@@ -454,6 +454,56 @@ const CSS = `
   border-radius: 6px;
 }
 
+/* The downloads strip: one row per transfer the reader has running or has just
+   finished. It sits between the header and the body because a download is not
+   the file's preview — it belongs to the pane, and it outlives the tab that
+   started it. */
+.dsh-fe-downloads {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 6px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  background: var(--dsw-alias-bg-skeleton);
+}
+
+.dsh-fe-download {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.dsh-fe-download-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dsh-fe-download-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dsh-fe-download[data-download-state='failed'] .dsh-fe-download-status {
+  color: var(--dsw-alias-label-error);
+}
+
+.dsh-fe-download-control {
+  flex: none;
+  height: 22px;
+  min-width: 0;
+}
+
 /* PDF: the browser's own reader, filling the pane. The element has to be given
    the pane's whole height rather than a scrollport's, because the reader scrolls
    its own pages. */

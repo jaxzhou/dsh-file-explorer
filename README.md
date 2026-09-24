@@ -30,9 +30,9 @@ Markdown behind it, a second document open beside it in its own tab, and an expo
 of it to PDF.
 
 **The recording is an older build than the list below.** It predates Mermaid
-diagrams, the PDF and Office previews and the pane's **Download** control, and it
-still shows an export handing the page to the browser's print dialog — which no
-export does now.
+diagrams, the PDF and Office previews, and downloading a file from the pane at
+all, and it still shows an export handing the page to the browser's print dialog —
+which no export does now.
 
 ## What you get
 
@@ -68,14 +68,22 @@ source, with the failure named above it.
 Text previews wrap at their spaces and keep every word whole; an image reads its
 complete bytes.
 
-Every preview carries **Download** in the pane's toolbar, which saves the file
-itself — not a conversion of it, which is why it is the one control that works for
-every kind of file, including the ones this pane will not draw. Every text body
-carries **Copy**, which copies the file's own text — a rendered Markdown document
-copies its Markdown source.
+Every preview carries one **Export** button in the pane's toolbar. Its first row
+is **Download**, which saves the file itself — not a conversion of it — so that row
+is there for every kind of file, including the ones this pane will not draw. **Its
+size is not a limit**: a download is read a window at a time rather than all at
+once, so a file larger than a preview can hold still saves normally — a 260 MB
+release tarball included. Up to 32 MiB it goes quietly to the browser's downloads;
+past that it asks where to put it and streams there, which keeps the memory it
+costs flat however large the file is. Several downloads run at once, each with its
+own row, its own progress and its own **Cancel**, and one failing leaves the
+others alone.
 
-A rendered Markdown or HTML document also carries **Export**, which **downloads a
-file directly** — no print dialog — in either of two formats:
+Every text body carries **Copy**, which copies the file's own text — a rendered
+Markdown document copies its Markdown source.
+
+A rendered Markdown or HTML document adds two rows to that menu — **PDF** and
+**Word** — and each **downloads a file directly**, with no print dialog:
 
 | Format | What it is |
 |---|---|
@@ -199,9 +207,14 @@ restart the profile.
 - **Only the OOXML formats are read.** `.doc`, `.xls` and `.ppt` are the older
   binary container, which this pane does not parse — it says so and offers the
   download instead.
-- **Preview and download are bounded by one complete-file read**, 32 MiB by
-  default in the shipped Web composition. A file above it reports the refusal
-  rather than arriving cut.
+- **A preview is bounded by one complete-file read**, 32 MiB by default in the
+  shipped Web composition: a larger PDF or Office package reports the refusal
+  rather than being shown cut. A **download** is not bounded that way — it pages
+  through the file — so something too large to preview can still be saved.
+- **A large download goes through the browser's save dialog.** Past 32 MiB the
+  bytes stream into a file you pick, which is what keeps the memory cost flat; a
+  browser without that API collects the file first, so a very large download
+  there costs its own size in memory.
 - **Long documents are cut at 60 PDF pages**, and an image past 8 MiB is left out;
   both are stated here because a silent cut reads as a complete export.
 

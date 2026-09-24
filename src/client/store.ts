@@ -23,6 +23,7 @@
 import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
 import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
+import type { DownloadFailure } from './download.ts'
 
 /**
  * How many tabs keep their loaded content. A dropped tab is still open: it reads
@@ -33,6 +34,40 @@ import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-fil
  * pin in memory.
  */
 export const RETAINED_PREVIEWS = 5
+
+/**
+ * How many downloads the pane lists at once.
+ *
+ * A running transfer is never dropped: its row is the only place its progress
+ * and its cancel control exist, so a row that vanished under the cap would
+ * strand a download the reader can no longer stop.
+ */
+export const MAX_DOWNLOADS = 8
+
+/** Where a download ended, which is every state but running. */
+export type DownloadOutcome =
+  | { readonly kind: 'done' }
+  | { readonly kind: 'cancelled' }
+  | { readonly kind: 'failed'; readonly failure: DownloadFailure }
+
+/** Where one download is. */
+export type DownloadState = { readonly kind: 'running' } | DownloadOutcome
+
+/** One file being saved to the reader's disk, or one that was. */
+export interface DownloadTask {
+  /** This transfer's identity, which is what a cancel or a dismissal names. */
+  readonly id: string
+  /** Absolute path of the file being saved. */
+  readonly path: string
+  /** Its name, which is what the download is saved as. */
+  readonly name: string
+  /** Bytes received so far. */
+  readonly loaded: number
+  /** The file's size, when the backend reports one. */
+  readonly total: number | undefined
+  /** Where the transfer is. */
+  readonly state: DownloadState
+}
 
 /** One directory's contents, as one expanded level of the tree. */
 export interface DirLevel {
@@ -126,6 +161,8 @@ export interface FilesState {
   modes: Record<string, PreviewMode>
   /** Line-wrap preference by absolute path; an absent entry wraps. */
   wraps: Record<string, boolean>
+  /** Downloads this session has started, newest last. */
+  downloads: DownloadTask[]
 }
 
 /** The explorer store's write set. */
@@ -160,6 +197,14 @@ type FilesActions = {
   setWrap: (draft: FilesState, path: string, wrap: boolean) => void
   /** Choose which body one tab shows. */
   setMode: (draft: FilesState, path: string, mode: PreviewMode) => void
+  /** Record one download as started. */
+  downloadStarted: (draft: FilesState, task: DownloadTask) => void
+  /** Record how far one download has got. */
+  downloadProgress: (draft: FilesState, id: string, loaded: number, total: number | undefined) => void
+  /** Record where one download ended. */
+  downloadSettled: (draft: FilesState, id: string, state: DownloadOutcome) => void
+  /** Drop one download from the list, which is what a finished one is dismissed with. */
+  downloadDismissed: (draft: FilesState, id: string) => void
 }
 
 /** The state a freshly created explorer starts from. */
@@ -174,6 +219,21 @@ function emptyState(): FilesState {
     retained: [],
     modes: {},
     wraps: {},
+    downloads: [],
+  }
+}
+
+/**
+ * Keep the download list to its cap, dropping the oldest finished one first.
+ * @param d - draft state.
+ */
+function trimDownloads(d: FilesState): void {
+  while (d.downloads.length > MAX_DOWNLOADS) {
+    const at = d.downloads.findIndex(task => task.state.kind !== 'running')
+    // Every row is a transfer still arriving: the cap yields, because a row that
+    // disappeared would strand a download the reader can no longer cancel.
+    if (at < 0) return
+    d.downloads.splice(at, 1)
   }
 }
 
@@ -206,7 +266,11 @@ export function createFilesStore(): EngineStoreHandle<FilesState, FilesActions> 
     init: emptyState,
     actions: {
       start: (d, root) => {
+        // Downloads outlive the tree: a session whose working directory changed
+        // mid-download has not stopped saving the file.
+        const downloads = d.downloads
         Object.assign(d, emptyState())
+        d.downloads = downloads
         d.root = root
         d.expanded = [root]
       },
@@ -275,6 +339,26 @@ export function createFilesStore(): EngineStoreHandle<FilesState, FilesActions> 
       },
       setMode: (d, path, mode) => {
         d.modes[path] = mode
+      },
+      downloadStarted: (d, task) => {
+        d.downloads.push(task)
+        trimDownloads(d)
+      },
+      downloadProgress: (d, id, loaded, total) => {
+        const at = d.downloads.findIndex(task => task.id === id)
+        if (at < 0) return
+        const task = d.downloads[at] as DownloadTask
+        d.downloads[at] = { ...task, loaded, total }
+      },
+      downloadSettled: (d, id, state) => {
+        const at = d.downloads.findIndex(task => task.id === id)
+        if (at < 0) return
+        const task = d.downloads[at] as DownloadTask
+        d.downloads[at] = { ...task, state }
+        trimDownloads(d)
+      },
+      downloadDismissed: (d, id) => {
+        d.downloads = d.downloads.filter(task => task.id !== id)
       },
     },
   })

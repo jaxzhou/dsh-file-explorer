@@ -73,11 +73,12 @@ function stubRequire() {
 }
 
 /** A fake client context recording every registration the plugin makes. */
-function fakeContext({ list, read, readAll }) {
+function fakeContext({ list, read, readAll, stat, readBytes }) {
   const registrations = []
   const effects = []
   const dictionaries = []
   const styles = []
+  const unconfigured = name => async () => ({ ok: false, error: { code: 'unexpected', message: name } })
   const ctx = {
     effect(callback, label) {
       const disposer = callback()
@@ -96,7 +97,9 @@ function fakeContext({ list, read, readAll }) {
       workspaceFiles: {
         list,
         read,
-        readAll: readAll ?? (async () => ({ ok: false, error: { code: 'unexpected', message: 'readAll' } })),
+        readAll: readAll ?? unconfigured('readAll'),
+        stat: stat ?? unconfigured('stat'),
+        readBytes: readBytes ?? unconfigured('readBytes'),
       },
     },
   }
@@ -867,6 +870,351 @@ test('a document with more in it than the pane shows says so', async () => {
   assert.equal(read.sheets.length, 8)
   assert.equal(read.truncated, true)
   assert.deepEqual(read.sheets[0].rows, [{ number: 1, cells: ['1'] }])
+})
+
+test('only a file worth streaming is streamed', async () => {
+  const registration = await loadClientFactory()
+  const { prefersStreamingSink, SILENT_DOWNLOAD_LIMIT } = registration.factory(stubRequire())
+
+  // A size the backend never reported cannot be judged, so it is collected: an
+  // unnecessary dialog is worse than a file held for a moment.
+  assert.equal(prefersStreamingSink(undefined, true), false)
+  assert.equal(prefersStreamingSink(SILENT_DOWNLOAD_LIMIT, true), false)
+  assert.equal(prefersStreamingSink(SILENT_DOWNLOAD_LIMIT + 1, true), true)
+  // A browser with no save dialog collects whatever the size.
+  assert.equal(prefersStreamingSink(SILENT_DOWNLOAD_LIMIT + 1, false), false)
+  assert.equal(prefersStreamingSink(undefined, false), false)
+})
+
+test('a file past the complete-read cap is saved a window at a time', async () => {
+  const registration = await loadClientFactory()
+  const client = registration.factory(stubRequire())
+  const { READ_WINDOW_BYTES, receiveFile } = client
+
+  // A file eight times the Host's whole-file cap, which is the size a release
+  // tarball actually is.
+  const size = 40 * 1024 * 1024
+  const payload = Buffer.alloc(READ_WINDOW_BYTES, 7).toString('base64')
+  const requested = []
+  const progress = []
+  const written = []
+
+  const result = await receiveFile({
+    size,
+    signal: new AbortController().signal,
+    sink: {
+      streaming: true,
+      write: async (chunk) => { written.push(chunk.length) },
+      finish: async () => { written.push('finished') },
+      discard: async () => { written.push('discarded') },
+    },
+    onProgress: (loaded, total) => { progress.push([loaded, total]) },
+    readWindow: async (offset, length) => {
+      requested.push([offset, length])
+      return { ok: true, data: client.bytesOfBase64(payload), eof: offset + READ_WINDOW_BYTES >= size }
+    },
+  })
+
+  assert.deepEqual(result, { kind: 'done', bytes: size })
+  // Every window is asked for in the size a Remote window allows, from where the
+  // last one ended, and the file is read to its last byte whatever its size.
+  assert.equal(requested.length, size / READ_WINDOW_BYTES)
+  assert.deepEqual(requested[0], [0, READ_WINDOW_BYTES])
+  assert.deepEqual(requested.at(-1), [size - READ_WINDOW_BYTES, READ_WINDOW_BYTES])
+  assert.deepEqual(progress.at(-1), [size, size])
+  // What was written is the file, then the sink is kept — never discarded.
+  assert.equal(written.filter(entry => typeof entry === 'number').reduce((sum, entry) => sum + entry, 0), size)
+  assert.deepEqual(written.at(-1), 'finished')
+})
+
+test('a window the Host refuses is asked for smaller rather than given up on', async () => {
+  const registration = await loadClientFactory()
+  const { MIN_READ_WINDOW_BYTES, READ_WINDOW_BYTES, receiveFile } = registration.factory(stubRequire())
+  assert.ok(MIN_READ_WINDOW_BYTES < READ_WINDOW_BYTES)
+
+  const lengths = []
+  const written = []
+  const result = await receiveFile({
+    size: 8,
+    signal: new AbortController().signal,
+    sink: {
+      streaming: false,
+      write: async () => { written.push('wrote') },
+      finish: async () => { written.push('finished') },
+      discard: async () => { written.push('discarded') },
+    },
+    readWindow: async (offset, length) => {
+      lengths.push(length)
+      // A deployment capping a window far below the default: refuse until the
+      // request fits, then answer.
+      if (length > 512 * 1024) {
+        return { ok: false, failure: { code: 'workspace-file/too-large', message: 'cap' } }
+      }
+      return { ok: true, data: new Uint8Array(8), eof: true }
+    },
+  })
+
+  assert.deepEqual(result, { kind: 'done', bytes: 8 })
+  assert.deepEqual(lengths, [READ_WINDOW_BYTES, READ_WINDOW_BYTES / 2, READ_WINDOW_BYTES / 4])
+  assert.deepEqual(written, ['wrote', 'finished'])
+})
+
+test('an abandoned or refused transfer leaves nothing behind', async () => {
+  const registration = await loadClientFactory()
+  const { receiveFile } = registration.factory(stubRequire())
+
+  const makeSink = () => {
+    const writes = []
+    return {
+      writes,
+      sink: {
+        streaming: false,
+        write: async () => { writes.push('wrote') },
+        finish: async () => { writes.push('finished') },
+        discard: async () => { writes.push('discarded') },
+      },
+    }
+  }
+
+  // Abandoned between windows: what was written is thrown away, and the transfer
+  // is a cancellation rather than a failure.
+  const abandoned = makeSink()
+  const controller = new AbortController()
+  const cancelled = await receiveFile({
+    size: 100,
+    signal: controller.signal,
+    sink: abandoned.sink,
+    readWindow: async () => {
+      controller.abort()
+      return { ok: true, data: new Uint8Array(10), eof: false }
+    },
+  })
+  assert.deepEqual(cancelled, { kind: 'cancelled' })
+  assert.deepEqual(abandoned.writes, ['wrote', 'discarded'])
+
+  // A window refused for any other reason fails the download, and the part that
+  // arrived is not left looking like the whole file.
+  const refused = makeSink()
+  const failed = await receiveFile({
+    size: 100,
+    signal: new AbortController().signal,
+    sink: refused.sink,
+    readWindow: async () => ({ ok: false, failure: { code: 'workspace-file/not-found', message: 'gone' } }),
+  })
+  assert.equal(failed.kind, 'failed')
+  assert.equal(failed.failure.kind, 'remote')
+  assert.equal(failed.failure.failure.code, 'workspace-file/not-found')
+  assert.deepEqual(refused.writes, ['discarded'])
+
+  // A Host that stops answering without claiming the end must not be read for
+  // ever.
+  const spinning = makeSink()
+  const stuck = await receiveFile({
+    size: undefined,
+    signal: new AbortController().signal,
+    sink: spinning.sink,
+    readWindow: async () => ({ ok: true, data: new Uint8Array(0), eof: false }),
+  })
+  assert.equal(stuck.kind, 'failed')
+  assert.equal(stuck.failure.kind, 'local')
+  assert.deepEqual(spinning.writes, ['discarded'])
+})
+
+test('the save dialog is asked for only when it is wanted, and its refusal is not a failure', async () => {
+  const registration = await loadClientFactory()
+  const { openSink, SILENT_DOWNLOAD_LIMIT } = registration.factory(stubRequire())
+  const big = SILENT_DOWNLOAD_LIMIT * 2
+
+  try {
+    // No picker in this browser: the bytes are collected, whatever the size.
+    delete globalThis.showSaveFilePicker
+    const collected = await openSink('a.tgz', big, 'application/gzip')
+    assert.equal(collected.kind, 'sink')
+    assert.equal(collected.sink.streaming, false)
+
+    // A picker, but a file small enough not to need it: still collected.
+    let asked = 0
+    globalThis.showSaveFilePicker = async () => { asked++; return { createWritable: async () => ({}) } }
+    const small = await openSink('a.txt', 1024, 'text/plain')
+    assert.equal(small.sink.streaming, false)
+    assert.equal(asked, 0)
+
+    // A file worth streaming: the dialog names it, and the bytes go straight in.
+    const chunks = []
+    globalThis.showSaveFilePicker = async ({ suggestedName }) => {
+      asked++
+      assert.equal(suggestedName, 'a.tgz')
+      return {
+        createWritable: async () => ({
+          write: async (chunk) => { chunks.push(chunk.length) },
+          close: async () => { chunks.push('closed') },
+          abort: async () => { chunks.push('aborted') },
+        }),
+      }
+    }
+    const streamed = await openSink('a.tgz', big, 'application/gzip')
+    assert.equal(streamed.kind, 'sink')
+    assert.equal(streamed.sink.streaming, true)
+    await streamed.sink.write(new Uint8Array(4))
+    await streamed.sink.finish()
+    assert.deepEqual(chunks, [4, 'closed'])
+
+    // The reader dismissing the dialog is a cancellation.
+    globalThis.showSaveFilePicker = async () => {
+      const error = new Error('cancelled')
+      error.name = 'AbortError'
+      throw error
+    }
+    assert.deepEqual(await openSink('a.tgz', big, 'application/gzip'), { kind: 'cancelled' })
+
+    // A dialog that refuses for any other reason still leaves the download
+    // possible, so the bytes are collected instead of the reader being told no.
+    globalThis.showSaveFilePicker = async () => { throw new Error('no user gesture') }
+    const fallback = await openSink('a.tgz', big, 'application/gzip')
+    assert.equal(fallback.kind, 'sink')
+    assert.equal(fallback.sink.streaming, false)
+  } finally {
+    delete globalThis.showSaveFilePicker
+  }
+})
+
+test('the face downloads a file the previews could not even read whole', async () => {
+  const registration = await loadClientFactory()
+  const client = registration.factory(stubRequire())
+  const { READ_WINDOW_BYTES } = client
+
+  const size = 40 * 1024 * 1024
+  const payload = Buffer.alloc(READ_WINDOW_BYTES, 3).toString('base64')
+  const calls = { stat: 0, readAll: 0, windows: [], suggested: null }
+  const written = []
+
+  const fake = fakeContext({
+    list: async () => ({ ok: true, value: { entries: [], truncated: false } }),
+    read: async () => ({ ok: false, error: { code: 'workspace-file/not-text', message: 'binary' } }),
+    // The whole-file read is exactly what used to fail here: a download must not
+    // go near it.
+    readAll: async () => ({
+      ok: false,
+      error: { code: 'workspace-file/too-large', message: `"big.tgz" exceeds the ${32 * 1024 * 1024} byte full-file cap` },
+    }),
+    stat: async () => {
+      calls.stat++
+      return { ok: true, value: { absolutePath: '/w/big.tgz', version: 'v1', bytes: size } }
+    },
+    readBytes: async (_session, _path, range) => {
+      calls.windows.push([range.offset, range.length])
+      return {
+        ok: true,
+        value: {
+          absolutePath: '/w/big.tgz',
+          version: 'v1',
+          bytes: size,
+          offset: range.offset,
+          data: payload,
+          eof: range.offset + READ_WINDOW_BYTES >= size,
+        },
+      }
+    },
+  })
+  client.apply(fake.ctx)
+
+  const store = fake.registrations[0].options.store
+  const draft = store.init()
+  store.actions.start(draft, '/w')
+  const bound = Object.fromEntries(
+    Object.entries(store.actions).map(([name, action]) => [name, (...args) => action(draft, ...args)]),
+  )
+
+  try {
+    // The reader has a save dialog, so a file this size streams into it.
+    globalThis.showSaveFilePicker = async ({ suggestedName }) => {
+      calls.suggested = suggestedName
+      return {
+        createWritable: async () => ({
+          write: async (chunk) => { written.push(chunk.length) },
+          close: async () => { written.push('closed') },
+          abort: async () => { written.push('aborted') },
+        }),
+      }
+    }
+    const face = fake.registrations[0].options.inject('session-1', bound)
+    face.download('/w/big.tgz', 'big.tgz')
+    // Every window settles on its own promise, so the transfer needs a turn per
+    // window before it is done.
+    for (let turn = 0; turn < 80 && draft.downloads[0]?.state.kind === 'running'; turn++) await settled()
+
+    assert.equal(calls.readAll, 0)
+    assert.equal(calls.stat, 1)
+    assert.equal(calls.windows.length, size / READ_WINDOW_BYTES)
+    assert.equal(calls.suggested, 'big.tgz')
+    // The bytes went to the file as they arrived, the file was kept, and the row
+    // says how much was saved.
+    assert.equal(
+      written.filter(entry => typeof entry === 'number').reduce((sum, entry) => sum + entry, 0),
+      size,
+    )
+    assert.equal(written.at(-1), 'closed')
+    assert.equal(draft.downloads.length, 1)
+    assert.deepEqual(draft.downloads[0].state, { kind: 'done' })
+    assert.equal(draft.downloads[0].loaded, size)
+    assert.equal(draft.downloads[0].total, size)
+
+    // A settled row is dismissed by hand, which is the only thing that removes
+    // it.
+    bound.downloadDismissed(draft.downloads[0].id)
+    assert.deepEqual(draft.downloads, [])
+  } finally {
+    delete globalThis.showSaveFilePicker
+  }
+})
+
+test('the pane tracks several downloads at once', async () => {
+  const registration = await loadClientFactory()
+  const client = registration.factory(stubRequire())
+  const { MAX_DOWNLOADS } = client
+  const fake = fakeContext({
+    list: async () => ({ ok: true, value: { entries: [], truncated: false } }),
+    read: async () => ({ ok: true, value: {} }),
+  })
+  client.apply(fake.ctx)
+  const store = fake.registrations[0].options.store
+  const d = store.init()
+  store.actions.start(d, '/w')
+
+  const task = id => ({
+    id, path: `/w/${id}`, name: id, loaded: 0, total: undefined, state: { kind: 'running' },
+  })
+  store.actions.downloadStarted(d, task('a'))
+  store.actions.downloadStarted(d, task('b'))
+  assert.deepEqual(d.downloads.map(entry => entry.id), ['a', 'b'])
+
+  // Progress belongs to one row, so two transfers running at once do not share a
+  // counter.
+  store.actions.downloadProgress(d, 'a', 100, 1000)
+  store.actions.downloadProgress(d, 'b', 7, undefined)
+  assert.equal(d.downloads[0].loaded, 100)
+  assert.equal(d.downloads[0].total, 1000)
+  assert.equal(d.downloads[1].loaded, 7)
+  assert.equal(d.downloads[1].total, undefined)
+
+  // One settles without touching the other.
+  store.actions.downloadSettled(d, 'a', { kind: 'failed', failure: { kind: 'local', message: 'disk full' } })
+  assert.deepEqual(d.downloads[0].state, { kind: 'failed', failure: { kind: 'local', message: 'disk full' } })
+  assert.equal(d.downloads[1].state.kind, 'running')
+
+  // The cap drops finished rows and never a running one, whose row is the only
+  // place its cancel control exists.
+  for (let index = 0; index < MAX_DOWNLOADS + 3; index++) {
+    store.actions.downloadStarted(d, task(`r${index}`))
+    store.actions.downloadSettled(d, `r${index}`, { kind: 'done' })
+  }
+  assert.ok(d.downloads.length <= MAX_DOWNLOADS)
+  assert.ok(d.downloads.some(entry => entry.id === 'b' && entry.state.kind === 'running'))
+
+  // A different workspace root is not a reason to forget a download in flight.
+  store.actions.start(d, '/other')
+  assert.ok(d.downloads.some(entry => entry.id === 'b'))
+  assert.equal(d.root, '/other')
 })
 
 test('tab labels disambiguate only the basenames that clash', async () => {

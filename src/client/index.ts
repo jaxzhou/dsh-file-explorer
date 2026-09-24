@@ -47,6 +47,13 @@ export {
   findMermaidFences, mermaidDestination, mermaidErrorMessage, replaceMermaidFences,
 } from './mermaid.ts'
 export type { MermaidFence } from './mermaid.ts'
+// The transfer loop takes its window reader and its sink as arguments, so the
+// tests can drive a whole download — of any size — without a Host or a browser.
+export {
+  bytesOfBase64, MIN_READ_WINDOW_BYTES, openSink, prefersStreamingSink, READ_WINDOW_BYTES,
+  receiveFile, SILENT_DOWNLOAD_LIMIT,
+} from './download.ts'
+export type { DownloadFailure, DownloadSink, ReceiveResult, WindowResult } from './download.ts'
 // The export writers are pure byte producers, so they are reachable from outside
 // the plugin: the contract tests parse what they write, which is the only way to
 // check a file format without opening the file in an application.
@@ -75,9 +82,10 @@ export type { SlidesDocument } from './office/slides.ts'
 export type { XmlElement } from './office/xml.ts'
 export type { ZipArchive } from './office/zip.ts'
 export { RETAINED_PREVIEWS } from './store.ts'
+export { MAX_DOWNLOADS } from './store.ts'
 export type {
-  DirLevel, FilesState, LevelState, PreviewContent, PreviewFile, PreviewImage, PreviewMode,
-  PreviewState, PreviewText,
+  DirLevel, DownloadOutcome, DownloadState, DownloadTask, FilesState, LevelState, PreviewContent,
+  PreviewFile, PreviewImage, PreviewMode, PreviewState, PreviewText,
 } from './store.ts'
 export type { FilesInjected, WorkspaceFilesRemote } from './face.ts'
 export type { FilesViewProps } from './FilesView.tsx'

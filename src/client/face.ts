@@ -18,11 +18,10 @@
 import type { BoundActions } from '@deepseek-ai/dsh-client-store'
 import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { bytesOfDataUrl } from './export/pdf.ts'
-import { downloadBlob } from './export/index.ts'
+import { bytesOfBase64, openSink, receiveFile } from './download.ts'
 import { previewFormatFor, readsAllBytes } from './format.ts'
 import { MAX_ASSET_BYTES } from './markdown-assets.ts'
-import type { PreviewText, createFilesStore } from './store.ts'
+import type { DownloadOutcome, PreviewText, createFilesStore } from './store.ts'
 
 /** The slice of the Client Remote face this plugin calls. */
 export type WorkspaceFilesRemote = Pick<ClientRemote, 'workspaceFiles'>
@@ -66,13 +65,36 @@ export interface FilesInjected {
   /**
    * Save one file to the reader's downloads — the file itself, not a conversion
    * of it, so this is the one control that works for every kind of file.
+   *
+   * Returns as soon as the transfer has been started: its progress and its
+   * outcome are the store's, because several downloads run at once and each
+   * needs its own row rather than the tool button that began it.
    * @param path - absolute file path.
    * @param name - the file's name, which becomes the download's name.
-   * @returns when the download has been handed to the browser.
-   * @throws when the file cannot be read, naming why.
    */
-  readonly download: (path: string, name: string) => Promise<void>
+  readonly download: (path: string, name: string) => void
+  /**
+   * Abandon one download that is still running, discarding what it has written.
+   * @param id - the download task's id, as the store records it.
+   */
+  readonly cancelDownload: (id: string) => void
 }
+
+/**
+ * Distinguishes one download from the next, across every face this module hands
+ * out.
+ */
+let nextDownloadId = 0
+
+/**
+ * The transfers in flight, by task id.
+ *
+ * Module scope rather than the face's, because a face is minted with its view:
+ * leaving the Files tab and coming back would otherwise leave a download running
+ * with nothing left that can cancel it, which is the one state a cancel control
+ * exists to prevent.
+ */
+const transfers = new Map<string, AbortController>()
 
 /**
  * Bind the explorer's face to one Session's Remote namespace.
@@ -207,14 +229,67 @@ export function filesFace(
       })
     },
     download(path, name) {
-      const format = previewFormatFor(path)
-      const mediaType = format.mediaType ?? 'application/octet-stream'
-      return remote.workspaceFiles.readAll(sessionId, path, signal).then((result) => {
-        if (!result.ok) throw new Error(result.error.message)
-        const bytes = bytesOfDataUrl(`data:${mediaType};base64,${result.value.data}`)
-        if (bytes === undefined) throw new Error('the file could not be decoded')
-        downloadBlob(new Blob([bytes], { type: mediaType }), name)
+      const id = `download-${nextDownloadId++}`
+      const controller = new AbortController()
+      transfers.set(id, controller)
+      const mediaType = previewFormatFor(path).mediaType ?? 'application/octet-stream'
+      const settle = (state: DownloadOutcome): void => { actions.downloadSettled(id, state) }
+      actions.downloadStarted({
+        id, path, name, loaded: 0, total: undefined, state: { kind: 'running' },
       })
+      void (async () => {
+        // The size comes first because it decides the sink: a file past the
+        // collect limit is streamed into one the reader picks, and a smaller one
+        // is handed over silently.
+        const stat = await remote.workspaceFiles.stat(sessionId, path, controller.signal)
+        if (!stat.ok) {
+          settle({ kind: 'failed', failure: { kind: 'remote', failure: stat.error } })
+          return
+        }
+        const size = stat.value.bytes
+        const choice = await openSink(name, size, mediaType)
+        if (choice.kind === 'cancelled') {
+          settle({ kind: 'cancelled' })
+          return
+        }
+        if (choice.kind === 'failed') {
+          settle({ kind: 'failed', failure: choice.failure })
+          return
+        }
+        const result = await receiveFile({
+          size,
+          sink: choice.sink,
+          signal: controller.signal,
+          readWindow: async (offset, length) => {
+            const window = await remote.workspaceFiles.readBytes(
+              sessionId, path, { offset, length }, controller.signal,
+            )
+            return window.ok
+              ? { ok: true, data: bytesOfBase64(window.value.data), eof: window.value.eof }
+              : { ok: false, failure: window.error }
+          },
+          onProgress: (loaded, total) => { actions.downloadProgress(id, loaded, total) },
+        })
+        settle(
+          result.kind === 'done'
+            ? { kind: 'done' }
+            : result.kind === 'cancelled' ? { kind: 'cancelled' } : result,
+        )
+      })()
+        .catch((error: unknown) => {
+          // An abort reaches here when it landed before the first window: that is
+          // a cancellation, not a failure.
+          settle(controller.signal.aborted
+            ? { kind: 'cancelled' }
+            : {
+              kind: 'failed',
+              failure: { kind: 'local', message: error instanceof Error ? error.message : String(error) },
+            })
+        })
+        .finally(() => { transfers.delete(id) })
+    },
+    cancelDownload(id) {
+      transfers.get(id)?.abort()
     },
   }
 }

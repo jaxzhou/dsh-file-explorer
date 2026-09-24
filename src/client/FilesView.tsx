@@ -43,12 +43,13 @@ import { LegacyOfficePanel, OfficePreview, PdfPreview } from './DocumentPreview.
 import type { PreviewFormat } from './format.ts'
 import type { FilesInjected } from './face.ts'
 import { relativeImageDestinations, resolveRelativePath } from './markdown-assets.ts'
+import type { DownloadFailure } from './download.ts'
 import {
   findMermaidFences, mermaidDestination, mermaidErrorMessage, renderMermaidPng,
   replaceMermaidFences,
 } from './mermaid.ts'
 import type {
-  FilesState, LevelState, PreviewContent, PreviewMode, PreviewState, PreviewText,
+  DownloadTask, FilesState, LevelState, PreviewContent, PreviewMode, PreviewState, PreviewText,
   createFilesStore,
 } from './store.ts'
 import type {} from './locales.ts'
@@ -666,6 +667,41 @@ function previewMeta(content: PreviewContent, t: TranslateNS<'fileExplorer'>): s
 }
 
 /**
+ * Say why one download could not be finished.
+ * @param t - namespace-bound translate.
+ * @param failure - what the transfer reported.
+ * @returns the line to show in the download's row.
+ */
+function downloadFailureLine(t: TranslateNS<'fileExplorer'>, failure: DownloadFailure): string {
+  if (failure.kind === 'local') return t('download.failed', { message: failure.message })
+  // A window the Host refused is the one Remote failure a download can be held
+  // to; everything else reads as the preview's own failure lines do.
+  return failure.failure.code === 'workspace-file/too-large'
+    ? t('download.error.tooLarge')
+    : previewFailureLine(t, failure.failure)
+}
+
+/**
+ * What one download's row says about it.
+ * @param task - the download.
+ * @param t - namespace-bound translate.
+ * @returns the line.
+ */
+function downloadStatus(task: DownloadTask, t: TranslateNS<'fileExplorer'>): string {
+  switch (task.state.kind) {
+    case 'running': {
+      const loaded = fileSizeText(task.loaded)
+      if (task.total === undefined || task.total === 0) return t('download.saving', { loaded })
+      const percent = Math.min(100, Math.round((task.loaded / task.total) * 100))
+      return t('download.progress', { percent, loaded, total: fileSizeText(task.total) })
+    }
+    case 'done': return t('download.done', { size: fileSizeText(task.loaded) })
+    case 'cancelled': return t('download.cancelled')
+    case 'failed': return downloadFailureLine(t, task.state.failure)
+  }
+}
+
+/**
  * The body of one settled preview tab.
  * @param props - the tab's content, its format, the elected body, and copy.
  * @returns the scrollport holding that body.
@@ -769,7 +805,8 @@ function PreviewBody({
  * @returns the two-pane explorer.
  */
 export function FilesView({
-  sessionId, useSessions, useStore, actions, list, read, readImage, readText, download, t,
+  sessionId, useSessions, useStore, actions, list, read, readImage, readText, download,
+  cancelDownload, t,
 }: FilesViewProps): ReactNode {
   const cwd = useSessions(sessions => sessions.byId[sessionId]?.cwd)
   const state = useStore(store => store)
@@ -785,8 +822,6 @@ export function FilesView({
   const [exporting, setExporting] = useState(false)
   /** Why the last export could not be written. */
   const [exportError, setExportError] = useState<string | null>(null)
-  /** Why the last download could not be read. */
-  const [downloadError, setDownloadError] = useState<string | null>(null)
 
   useEffect(() => () => {
     if (copyTimer.current !== null) clearTimeout(copyTimer.current)
@@ -882,16 +917,13 @@ export function FilesView({
    *
    * The file itself, not a conversion of it — which makes this the one control
    * that works for every kind of file the tree can list, including the ones this
-   * pane declines to draw.
+   * pane declines to draw. The transfer reports through the store rather than
+   * through this component, because several of them can be running at once and
+   * each needs its own row, its own progress, and its own way out.
    */
   const downloadActive = (): void => {
     if (active === null) return
-    setDownloadError(null)
-    void download(active, pathParts(active).name).catch((error: unknown) => {
-      // A download that never arrives is the one outcome a reader cannot
-      // diagnose, so what went wrong is said where the export's failure is.
-      setDownloadError(error instanceof Error ? error.message : String(error))
-    })
+    download(active, pathParts(active).name)
   }
   /**
    * Export the rendered body as a file, and download it.
@@ -938,6 +970,11 @@ export function FilesView({
     && jsonDocument === undefined
     && content !== null
     && content.kind === 'text'
+  // The menu's export rows need a rendered document — the body that has a page to
+  // write — while its Download row needs only a file, which is why the menu
+  // itself is offered for every tab.
+  const canExport = body === 'rendered' && format !== null && canExportPdf(format)
+    && content !== null && content.kind === 'text'
   const meta = content === null ? null : previewMeta(content, t)
 
   return (
@@ -1032,16 +1069,47 @@ export function FilesView({
               </button>
             )}
             {active !== null && (
-              <button
-                type="button"
-                className="dsh-fe-tool"
-                aria-label={t('preview.download')}
-                title={t('preview.download')}
-                data-preview-download
-                onClick={downloadActive}
-              >
-                {t('preview.download')}
-              </button>
+              <Menu
+                open={exportOpen}
+                anchor={(
+                  <button
+                    type="button"
+                    className="dsh-fe-tool"
+                    aria-label={t('export.menu')}
+                    title={t('export.menu')}
+                    aria-haspopup="menu"
+                    aria-expanded={exportOpen}
+                    aria-busy={exporting || undefined}
+                    data-preview-export
+                    onClick={() => { setExportOpen(open => !open) }}
+                  >
+                    <IconDownloadOutline16 />
+                  </button>
+                )}
+                items={[
+                  // Saving the file is the row every kind of file has; exporting a
+                  // document is what two of them add below it.
+                  { id: 'download', label: t('preview.download') },
+                  ...(canExport
+                    ? [
+                      { type: 'separator' as const, id: 'export-separator' },
+                      { id: 'pdf', label: t('export.pdf'), disabled: exporting },
+                      { id: 'word', label: t('export.word'), disabled: exporting },
+                    ]
+                    : []),
+                ]}
+                onSelect={(id) => {
+                  setExportOpen(false)
+                  if (id === 'download') downloadActive()
+                  else runExport(id === 'word' ? 'word' : 'pdf')
+                }}
+                onClose={() => { setExportOpen(false) }}
+                // Portalled: this pane clips its own overflow, so an in-place list
+                // would be cropped by the view's edge.
+                portal
+                align="end"
+                side="bottom"
+              />
             )}
             {active !== null && format !== null && hasSourceToggle(format) && (
               <button
@@ -1055,41 +1123,6 @@ export function FilesView({
               >
                 {body === 'source' ? t('preview.rendered') : t('preview.source')}
               </button>
-            )}
-            {active !== null && body === 'rendered' && format !== null && canExportPdf(format) && (
-              <Menu
-                open={exportOpen}
-                anchor={(
-                  <button
-                    type="button"
-                    className="dsh-fe-tool"
-                    aria-label={t('export.label')}
-                    title={t('export.label')}
-                    aria-haspopup="menu"
-                    aria-expanded={exportOpen}
-                    aria-busy={exporting || undefined}
-                    disabled={exporting}
-                    data-preview-export
-                    onClick={() => { setExportOpen(open => !open) }}
-                  >
-                    <IconDownloadOutline16 />
-                  </button>
-                )}
-                items={[
-                  { id: 'pdf', label: t('export.pdf') },
-                  { id: 'word', label: t('export.word') },
-                ]}
-                onSelect={(id) => {
-                  setExportOpen(false)
-                  runExport(id === 'word' ? 'word' : 'pdf')
-                }}
-                onClose={() => { setExportOpen(false) }}
-                // Portalled: this pane clips its own overflow, so an in-place list
-                // would be cropped by the view's edge.
-                portal
-                align="end"
-                side="bottom"
-              />
             )}
             {active !== null && body === 'source' && (
               <button
@@ -1123,10 +1156,29 @@ export function FilesView({
               {t('export.failed', { message: exportError })}
             </p>
           )}
-          {downloadError !== null && (
-            <p className="dsh-fe-note dsh-fe-note-error" data-preview-download-error>
-              {t('preview.downloadFailed', { message: downloadError })}
-            </p>
+          {state.downloads.length > 0 && (
+            <div className="dsh-fe-downloads" data-preview-downloads aria-label={t('download.title')}>
+              {state.downloads.map(task => (
+                <div className="dsh-fe-download" key={task.id} data-download-state={task.state.kind}>
+                  <span className="dsh-fe-download-name" title={task.path}>{task.name}</span>
+                  <span className="dsh-fe-download-status" data-download-status>
+                    {downloadStatus(task, t)}
+                  </span>
+                  <button
+                    type="button"
+                    className="dsh-fe-tool dsh-fe-download-control"
+                    data-download-control={task.state.kind === 'running' ? 'cancel' : 'dismiss'}
+                    aria-label={task.state.kind === 'running' ? t('download.cancel') : t('download.dismiss')}
+                    onClick={() => {
+                      if (task.state.kind === 'running') cancelDownload(task.id)
+                      else actions.downloadDismissed(task.id)
+                    }}
+                  >
+                    {task.state.kind === 'running' ? t('download.cancel') : t('download.dismiss')}
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
           {active !== null && format !== null && format.kind === 'legacyOffice' && (
             <LegacyOfficePanel t={t} />

@@ -73,6 +73,7 @@ composed.
 | `src/client/format.ts` | Suffix → preview format, and the grammar/media-type tables |
 | `src/client/markdown-assets.ts` | The relative image destinations a Markdown document names, and where each resolves |
 | `src/client/mermaid.ts` | The ```mermaid fence scan, and drawing one to the PNG the preview and both exports carry |
+| `src/client/download.ts` | The windowed transfer, and the two sinks a download can go to |
 | `src/client/export/` | The block model a document exports as, and the PDF, Word and zip writers |
 | `src/client/DocumentPreview.tsx` | The PDF, Word, Excel and PowerPoint bodies |
 | `src/client/office/` | The OOXML readers: the zip container, a small XML reader, and one reader per package |
@@ -189,9 +190,39 @@ is the point of how it is built:
   keeps a browser without a PDF reader from painting an empty rectangle.
 
 Everything a preview reads is a complete-file read, bounded by the deployment's
-`workspaceFiles.maxFileBytes` (32 MiB by default). The **Download** control reads
-through the same path, which is why it works for a file whose format this pane
-does not draw.
+`workspaceFiles.maxFileBytes` (32 MiB by default). The **Download** row of the
+pane's toolbar menu reads through the same path, which is why it works for a file
+whose format this pane does not draw.
+
+### A download pages through the file; it does not read it
+
+The Host caps a **complete** read (`workspaceFiles.maxFileBytes`, 32 MiB by
+default), and the file someone actually wants to download is usually well past
+it — the first user report of this was a 260 MiB release tarball. So `download`
+never calls `readAll`:
+
+- `stat` gives the size, then `office`-style windows come from **`readBytes`**,
+  which is capped per *window* (`maxBytes`, 2 MiB by default) and not by the
+  complete-file cap. That asymmetry is the whole reason a download has no size
+  limit.
+- The window size is **asked for, not assumed**: a refusal with
+  `workspace-file/too-large` halves it down to `MIN_READ_WINDOW_BYTES` before the
+  download gives up. This bundle cannot read a deployment's `maxBytes`, so it
+  must not depend on the default.
+- **Two sinks**, chosen by size. Up to `SILENT_DOWNLOAD_LIMIT` the bytes are
+  collected and handed over as one Blob — the silent download that was there
+  before. Past it, `showSaveFilePicker` gets a file and each window is written as
+  it arrives, so memory stays flat. A picker that fails for any reason other than
+  the reader dismissing it (an expired gesture, a policy) falls back to collecting,
+  because the download is still possible and "no" twice is not an answer.
+- **Transfers live in a module-level registry**, not in the face. A face is minted
+  with its view, so a map owned by one would leave a download running with nothing
+  able to cancel it after a tab switch — the exact state the cancel control exists
+  to prevent. Progress and outcome go to the **store**, so each of several
+  concurrent downloads has its own row.
+- Nothing calls `readAll` on this path, and the regression test says so: it
+  downloads 40 MiB through a fake Remote whose `readAll` always fails, and asserts
+  it was never called.
 
 ### A `link:` install breaks when the package is renamed
 
@@ -230,9 +261,9 @@ Two more npm facts worth remembering:
 
 The committed recording is an older build, and the README says so. It predates
 local images in Markdown (it shows `images/*.png` rendering as alt text), Mermaid
-diagrams, the PDF and Office previews, and the pane's **Download** control — and
-it ends on an export handing the page to the browser's print dialog, which no
-export does now. Re-record it when that gap would mislead, and update both
+diagrams, the PDF and Office previews, and downloading a file from the pane at all
+— and it ends on an export handing the page to the browser's print dialog, which
+no export does now. Re-record it when that gap would mislead, and update both
 READMEs' demo sections when you do. The README embeds a
 GIF and links the MP4 beside it. GitHub renders a committed video only on its own
 file page, so the animation is what plays inline; the link is the same recording at
