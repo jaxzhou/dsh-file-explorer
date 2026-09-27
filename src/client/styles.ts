@@ -139,6 +139,19 @@ const CSS = `
   height: 15px;
 }
 
+/* A toggle that is on keeps the fill the pointer would give it, so the state is
+   legible without opening the tooltip. */
+.dsh-fe-tool[aria-pressed='true'] {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+/* The copy button confirms in place, which is the one button whose icon changes
+   rather than its fill. */
+.dsh-fe-tool[data-preview-copy-state='copied'] {
+  color: var(--dsw-alias-brand-primary);
+}
+
 .dsh-fe-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -500,8 +513,10 @@ const CSS = `
 
 .dsh-fe-download-control {
   flex: none;
+  width: 22px;
+  min-width: 22px;
   height: 22px;
-  min-width: 0;
+  padding: 0;
 }
 
 /* PDF: the browser's own reader, filling the pane. The element has to be given

@@ -32,8 +32,10 @@ import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/clie
 import type { InjectFace, PropsLocale, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
 import {
-  CodeBlock, FileTypeIcon, IconDownloadOutline16, IconFolderClose16, IconFolderOpen16,
-  IconRefreshOutline16, JsonTree, MarkdownText, Menu, classifyFileType, fileSizeText, writeClipboard,
+  CodeBlock, FileTypeIcon, IconBrowseOutline16, IconCheckOutline16, IconCloseOutline16,
+  IconCodeOutline16, IconCopyOutline16, IconDownloadOutline16, IconFolderClose16,
+  IconFolderOpen16, IconRefreshOutline16, IconRightUpOutline16, IconStopFill16,
+  JsonTree, MarkdownText, Menu, classifyFileType, fileSizeText, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { JsonTreeLabels, MarkdownLabels } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
@@ -1043,7 +1045,7 @@ export function FilesView({
                           data-preview-tab-close={path}
                           onClick={() => { closeTab(path) }}
                         >
-                          <span aria-hidden="true">×</span>
+                          <IconCloseOutline16 size={12} />
                         </button>
                       </span>
                     )
@@ -1060,12 +1062,13 @@ export function FilesView({
               <button
                 type="button"
                 className="dsh-fe-tool"
-                aria-label={t('preview.copy')}
-                title={t('preview.copy')}
+                aria-label={copied === active ? t('preview.copied') : t('preview.copy')}
+                title={copied === active ? t('preview.copied') : t('preview.copy')}
                 data-preview-copy
+                data-preview-copy-state={copied === active ? 'copied' : 'idle'}
                 onClick={copyActive}
               >
-                {copied === active ? t('preview.copied') : t('preview.copy')}
+                {copied === active ? <IconCheckOutline16 /> : <IconCopyOutline16 />}
               </button>
             )}
             {active !== null && (
@@ -1119,9 +1122,11 @@ export function FilesView({
                 aria-label={body === 'source' ? t('preview.rendered') : t('preview.source')}
                 title={body === 'source' ? t('preview.rendered') : t('preview.source')}
                 data-preview-mode-toggle
+                data-preview-mode={body === 'source' ? 'source' : 'rendered'}
                 onClick={() => { actions.setMode(active, body === 'source' ? 'rendered' : 'source') }}
               >
-                {body === 'source' ? t('preview.rendered') : t('preview.source')}
+                {/* The icon names what pressing it shows, which is the other body. */}
+                {body === 'source' ? <IconBrowseOutline16 /> : <IconCodeOutline16 />}
               </button>
             )}
             {active !== null && body === 'source' && (
@@ -1132,9 +1137,10 @@ export function FilesView({
                 aria-label={wrap ? t('preview.nowrap') : t('preview.wrap')}
                 title={wrap ? t('preview.nowrap') : t('preview.wrap')}
                 data-preview-wrap-toggle
+                data-preview-wrap={wrap ? 'on' : 'off'}
                 onClick={() => { actions.setWrap(active, !wrap) }}
               >
-                {wrap ? '↵' : '→'}
+                <IconRightUpOutline16 />
               </button>
             )}
             {active !== null && (
@@ -1174,7 +1180,9 @@ export function FilesView({
                       else actions.downloadDismissed(task.id)
                     }}
                   >
-                    {task.state.kind === 'running' ? t('download.cancel') : t('download.dismiss')}
+                    {/* Stopping a transfer and clearing its row are different
+                        acts, so they are different glyphs. */}
+                    {task.state.kind === 'running' ? <IconStopFill16 /> : <IconCloseOutline16 />}
                   </button>
                 </div>
               ))}
@@ -1192,8 +1200,15 @@ export function FilesView({
               <p className="dsh-fe-note dsh-fe-note-error" data-preview-code={preview.failure.code}>
                 {previewFailureLine(t, preview.failure)}
               </p>
-              <button type="button" className="dsh-fe-tool" onClick={reloadPreview}>
-                {t('preview.reload')}
+              <button
+                type="button"
+                className="dsh-fe-tool"
+                aria-label={t('preview.reload')}
+                title={t('preview.reload')}
+                data-preview-reload-failed
+                onClick={reloadPreview}
+              >
+                <IconRefreshOutline16 />
               </button>
             </div>
           )}

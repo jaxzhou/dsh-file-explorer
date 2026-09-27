@@ -177,6 +177,15 @@ is the point of how it is built:
   round-tripped — the writer types its markers into the text, so a list comes
   back as a paragraph, and the list path is covered by a hand-written fixture
   that uses `w:numPr` the way Word does.
+- **Formatting lives in the shared model, not in the reader.** `InlineRun`
+  carries underline, strikethrough, super- and subscript, colour and highlight,
+  and the heading/paragraph/quote blocks carry alignment. The reader fills them
+  from `w:u`, `w:strike`, `w:vertAlign`, `w:color`, `w:highlight`/`w:shd` and
+  `w:jc`; the writer emits them back. Adding a format on one side only breaks the
+  round trip, which is the point of it being a round trip.
+  A highlight is written as `w:shd` rather than as `w:highlight`, because the
+  named highlight covers sixteen colours and a fill covers the one the document
+  used; the reader takes either spelling.
 - **The ceiling is content, not layout, and it is deliberate.** Do not "fix" a
   deck rendering as an outline by adding a layout engine: a faithful slide needs
   the theme, the fonts, and every shape's geometry, which is a megabyte-scale

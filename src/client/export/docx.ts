@@ -11,7 +11,7 @@
  * applied directly on runs and paragraphs rather than through a styles part, which
  * removes a whole file from the package and a class of "style not found" failures.
  */
-import type { Block, InlineRun } from './model.ts'
+import type { Block, BlockAlign, InlineRun } from './model.ts'
 import { bytesOfDataUrl } from './pdf.ts'
 import { zip, type ZipPart } from './zip.ts'
 
@@ -54,14 +54,49 @@ function xml(value: string): string {
 }
 
 /**
+ * The six-digit hex an OOXML attribute carries, from a CSS colour.
+ * @param value - the CSS colour.
+ * @returns the hex digits, or undefined when the colour is not one this writer
+ * can state in OOXML.
+ */
+function ooxmlHex(value: string): string | undefined {
+  const match = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(value.trim())
+  if (match === null) return undefined
+  const digits = match[1] as string
+  const full = digits.length === 3 ? digits.replace(/./g, character => character + character) : digits
+  return full.toUpperCase()
+}
+
+/**
+ * One block's alignment as `w:jc`.
+ * @param align - the alignment, when the block carries one.
+ * @returns the property, or an empty string for a block that states none.
+ */
+function alignXml(align: BlockAlign | undefined): string {
+  if (align === undefined) return ''
+  return `<w:jc w:val="${align === 'justify' ? 'both' : align}"/>`
+}
+
+/**
  * One run of text as `w:r`.
  * @param run - the run, with its emphasis.
  * @returns the run's XML.
  */
 function runXml(run: InlineRun): string {
+  const color = run.color === undefined ? undefined : ooxmlHex(run.color)
+  const highlight = run.highlight === undefined ? undefined : ooxmlHex(run.highlight)
   const properties = [
     run.bold === true ? '<w:b/>' : '',
     run.italic === true ? '<w:i/>' : '',
+    run.underline === true ? '<w:u w:val="single"/>' : '',
+    run.strike === true ? '<w:strike/>' : '',
+    run.sup === true ? '<w:vertAlign w:val="superscript"/>' : '',
+    run.sub === true ? '<w:vertAlign w:val="subscript"/>' : '',
+    color === undefined ? '' : `<w:color w:val="${color}"/>`,
+    // Shading rather than `w:highlight`: a named highlight covers sixteen
+    // colours, and a fill covers the one the document actually used. The reader
+    // takes either spelling.
+    highlight === undefined ? '' : `<w:shd w:val="clear" w:color="auto" w:fill="${highlight}"/>`,
     run.code === true ? '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/>' : '',
   ].join('')
   const prefix = properties === '' ? '' : `<w:rPr>${properties}</w:rPr>`
@@ -152,18 +187,19 @@ export function docxFromBlocks(blocks: readonly Block[], title: string): Uint8Ar
           // paragraph: Word reads it as one, and it is direct formatting, so the
           // package still needs no styles part for the style to resolve. It is
           // also what the reader next door finds a heading by.
-          `<w:outlineLvl w:val="${block.level - 1}"/>`
+          alignXml(block.align)
+          + `<w:outlineLvl w:val="${block.level - 1}"/>`
           + `<w:spacing w:before="240" w:after="120"/><w:rPr><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr>`,
         ))
         break
       }
       case 'paragraph':
-        body.push(paragraphXml(block.runs, '<w:spacing w:after="120"/>'))
+        body.push(paragraphXml(block.runs, `${alignXml(block.align)}<w:spacing w:after="120"/>`))
         break
       case 'quote':
         body.push(paragraphXml(
           block.runs.map(run => ({ ...run, italic: true })),
-          '<w:ind w:left="480"/><w:spacing w:after="120"/>',
+          `${alignXml(block.align)}<w:ind w:left="480"/><w:spacing w:after="120"/>`,
         ))
         break
       case 'list': {

@@ -187,6 +187,9 @@ test('the stylesheet installer writes one owned style tag', async () => {
     assert.match(css, /overflow-wrap:\s*break-word/)
     assert.doesNotMatch(css, /overflow-wrap:\s*anywhere/)
     assert.doesNotMatch(css, /word-break:\s*break-all/)
+    // The toolbar's controls are icons, so a toggle states itself by its fill;
+    // there is no text label left to say which state it is in.
+    assert.match(css, /\.dsh-fe-tool\[aria-pressed='true'\]/)
     // The header row must not share the content's surface, and the code block's
     // own banner must stay hidden so one copy control exists per pane.
     assert.match(css, /\.dsh-fe-head\s*\{[^}]*background:\s*var\(--dsw-alias-bg-skeleton\)/)
@@ -1215,6 +1218,87 @@ test('the pane tracks several downloads at once', async () => {
   store.actions.start(d, '/other')
   assert.ok(d.downloads.some(entry => entry.id === 'b'))
   assert.equal(d.root, '/other')
+})
+
+test('a Word run keeps the formatting Word gave it, not only its text', async () => {
+  const registration = await loadClientFactory()
+  const { readWord, zip } = registration.factory(stubRequire())
+
+  const document = '<w:document xmlns:w="urn:w"><w:body>'
+    // Every basic character format, plus the two spellings that mean "no
+    // underline" and "a fill rather than a named highlight".
+    + '<w:p><w:r><w:rPr><w:u w:val="single"/><w:strike/></w:rPr><w:t>marked</w:t></w:r>'
+    + '<w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>2</w:t></w:r>'
+    + '<w:r><w:rPr><w:vertAlign w:val="subscript"/></w:rPr><w:t>i</w:t></w:r>'
+    + '<w:r><w:rPr><w:color w:val="FF0000"/><w:highlight w:val="yellow"/></w:rPr><w:t>loud</w:t></w:r>'
+    + '<w:r><w:rPr><w:u w:val="none"/></w:rPr><w:t>plain</w:t></w:r>'
+    + '<w:r><w:rPr><w:shd w:val="clear" w:fill="00FF00"/></w:rPr><w:t>filled</w:t></w:r>'
+    + '</w:p>'
+    // Alignment is a paragraph property, in the spellings Word writes.
+    + '<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:t>middle</w:t></w:r></w:p>'
+    + '<w:p><w:pPr><w:jc w:val="both"/></w:pPr><w:r><w:t>spread</w:t></w:r></w:p>'
+    // A quote is a style, so the styles part is what says which id means one.
+    + '<w:p><w:pPr><w:pStyle w:val="Quote"/></w:pPr><w:r><w:t>quoted</w:t></w:r></w:p>'
+    + '</w:body></w:document>'
+  const styles = '<w:styles xmlns:w="urn:w"><w:style w:type="paragraph" w:styleId="Quote">'
+    + '<w:name w:val="Quote"/></w:style></w:styles>'
+
+  const read = await readWord(zip([
+    { name: 'word/document.xml', data: new TextEncoder().encode(document) },
+    { name: 'word/styles.xml', data: new TextEncoder().encode(styles) },
+  ]))
+
+  assert.deepEqual(read.blocks.map(block => block.kind), ['paragraph', 'paragraph', 'paragraph', 'quote'])
+  // A run carries what it says and nothing it does not: `w:u w:val="none"` is the
+  // absence of an underline, not the presence of one.
+  assert.deepEqual(read.blocks[0].runs, [
+    { text: 'marked', underline: true, strike: true },
+    { text: '2', sup: true },
+    { text: 'i', sub: true },
+    { text: 'loud', color: '#ff0000', highlight: '#ffff00' },
+    { text: 'plain' },
+    { text: 'filled', highlight: '#00ff00' },
+  ])
+  assert.equal(read.blocks[1].align, 'center')
+  assert.equal(read.blocks[2].align, 'justify')
+  assert.equal(read.blocks[3].kind, 'quote')
+  assert.deepEqual(read.blocks[3].runs, [{ text: 'quoted' }])
+})
+
+test('basic formatting survives a Word round trip', async () => {
+  const registration = await loadClientFactory()
+  const { docxFromBlocks, readWord } = registration.factory(stubRequire())
+
+  const blocks = [
+    { kind: 'heading', level: 1, align: 'center', runs: [{ text: 'Centred' }] },
+    {
+      kind: 'paragraph',
+      align: 'right',
+      runs: [
+        { text: 'u', underline: true },
+        { text: 's', strike: true },
+        { text: 'x', sup: true },
+        { text: 'i', sub: true },
+        { text: 'red', color: '#ff0000' },
+        { text: 'lit', highlight: '#ffff00' },
+      ],
+    },
+  ]
+  const read = await readWord(docxFromBlocks(blocks, 'doc'))
+
+  // A heading comes back bold because the writer marks one that way as well as
+  // by its outline level; its alignment is its own.
+  assert.equal(read.blocks[0].align, 'center')
+  assert.deepEqual(read.blocks[0].runs, [{ text: 'Centred', bold: true }])
+  assert.equal(read.blocks[1].align, 'right')
+  assert.deepEqual(read.blocks[1].runs, [
+    { text: 'u', underline: true },
+    { text: 's', strike: true },
+    { text: 'x', sup: true },
+    { text: 'i', sub: true },
+    { text: 'red', color: '#ff0000' },
+    { text: 'lit', highlight: '#ffff00' },
+  ])
 })
 
 test('tab labels disambiguate only the basenames that clash', async () => {

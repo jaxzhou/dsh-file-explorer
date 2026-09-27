@@ -18,7 +18,27 @@ export interface InlineRun {
   readonly bold?: boolean
   readonly italic?: boolean
   readonly code?: boolean
+  /** Underlined, from `w:u` or `<u>`. */
+  readonly underline?: boolean
+  /** Struck through, from `w:strike` or `<s>`/`<del>`. */
+  readonly strike?: boolean
+  /** Raised above the baseline, from `w:vertAlign` or `<sup>`. */
+  readonly sup?: boolean
+  /** Lowered below the baseline, from `w:vertAlign` or `<sub>`. */
+  readonly sub?: boolean
+  /** The run's colour, as a CSS colour, when the document sets one. */
+  readonly color?: string
+  /** The highlight behind the run, as a CSS colour, when the document sets one. */
+  readonly highlight?: string
 }
+
+/**
+ * Where a block's text sits across the column.
+ *
+ * `left` is the absence of a choice rather than a value, so a document that never
+ * says anything about alignment carries nothing here.
+ */
+export type BlockAlign = 'center' | 'right' | 'justify'
 
 /** One table cell, as the runs it holds. */
 export interface TableCell {
@@ -27,9 +47,22 @@ export interface TableCell {
 
 /** One block of the document. */
 export type Block =
-  | { readonly kind: 'heading'; readonly level: number; readonly runs: readonly InlineRun[] }
-  | { readonly kind: 'paragraph'; readonly runs: readonly InlineRun[] }
-  | { readonly kind: 'quote'; readonly runs: readonly InlineRun[] }
+  | {
+    readonly kind: 'heading'
+    readonly level: number
+    readonly runs: readonly InlineRun[]
+    readonly align?: BlockAlign
+  }
+  | {
+    readonly kind: 'paragraph'
+    readonly runs: readonly InlineRun[]
+    readonly align?: BlockAlign
+  }
+  | {
+    readonly kind: 'quote'
+    readonly runs: readonly InlineRun[]
+    readonly align?: BlockAlign
+  }
   | { readonly kind: 'list'; readonly ordered: boolean; readonly depth: number; readonly runs: readonly InlineRun[] }
   | { readonly kind: 'code'; readonly text: string }
   | { readonly kind: 'rule' }
@@ -51,8 +84,58 @@ export type Block =
  */
 const INLINE_TAGS = new Set([
   'a', 'abbr', 'b', 'cite', 'code', 'del', 'em', 'i', 'ins', 'kbd', 'label', 'mark',
-  'q', 's', 'samp', 'small', 'span', 'strong', 'sub', 'sup', 'time', 'u', 'var',
+  'q', 's', 'samp', 'small', 'span', 'strike', 'strong', 'sub', 'sup', 'time', 'u', 'var',
 ])
+
+/** The emphasis one run carries, before its text is known. */
+export type RunFlags = Omit<InlineRun, 'text'>
+
+/**
+ * Whether two runs carry the same emphasis, which is what lets adjacent runs
+ * merge into one.
+ * @param left - the run already in the list.
+ * @param right - the emphasis the arriving text carries.
+ * @returns whether the arriving text belongs in the existing run.
+ */
+function sameRunStyle(left: InlineRun, right: RunFlags): boolean {
+  return (left.bold === true) === (right.bold === true)
+    && (left.italic === true) === (right.italic === true)
+    && (left.code === true) === (right.code === true)
+    && (left.underline === true) === (right.underline === true)
+    && (left.strike === true) === (right.strike === true)
+    && (left.sup === true) === (right.sup === true)
+    && (left.sub === true) === (right.sub === true)
+    && (left.color ?? '') === (right.color ?? '')
+    && (left.highlight ?? '') === (right.highlight ?? '')
+}
+
+/**
+ * The colour and highlight an element's own inline style carries, if any.
+ * @param element - the element being entered.
+ * @param inherited - the emphasis carried in from an ancestor.
+ * @returns the colour fields, carrying the inherited ones forward when this
+ * element says nothing about them.
+ */
+function inlineColors(element: Element, inherited: RunFlags): RunFlags {
+  const style = (element as HTMLElement).style
+  const color = style === undefined || style.color === '' ? inherited.color : style.color
+  const background = style === undefined ? '' : style.backgroundColor
+  const highlight = background === '' || background === 'transparent' ? inherited.highlight : background
+  return {
+    ...(color === undefined ? {} : { color }),
+    ...(highlight === undefined ? {} : { highlight }),
+  }
+}
+
+/**
+ * Where one element's text sits across the column.
+ * @param element - the element.
+ * @returns its alignment, or undefined when it states none this model carries.
+ */
+function alignOf(element: Element): BlockAlign | undefined {
+  const value = (element as HTMLElement).style?.textAlign
+  return value === 'center' || value === 'right' || value === 'justify' ? value : undefined
+}
 
 /** Heading tag name to level. */
 const HEADING_LEVELS: Readonly<Record<string, number>> = {
@@ -81,22 +164,21 @@ function collapse(text: string): string {
  */
 export function runsOf(
   element: Element,
-  inherited: { bold?: boolean; italic?: boolean; code?: boolean } = {},
+  inherited: RunFlags = {},
 ): InlineRun[] {
   const runs: InlineRun[] = []
-  const push = (text: string, flags: typeof inherited, keepLeading: boolean): void => {
+  const push = (text: string, flags: RunFlags, keepLeading: boolean): void => {
     if (text === '') return
     const trimmed = keepLeading ? text.replace(/\s+$/, '') : text.replace(/^\s+|\s+$/g, '')
     if (trimmed === '') return
     const previous = runs.at(-1)
-    if (previous !== undefined && previous.bold === flags.bold
-      && previous.italic === flags.italic && previous.code === flags.code) {
+    if (previous !== undefined && sameRunStyle(previous, flags)) {
       runs[runs.length - 1] = { ...previous, text: previous.text + trimmed }
       return
     }
     runs.push({ text: trimmed, ...flags })
   }
-  const walk = (node: Node, flags: typeof inherited, first: boolean): void => {
+  const walk = (node: Node, flags: RunFlags, first: boolean): void => {
     for (const child of node.childNodes) {
       if (child.nodeType === Node.TEXT_NODE) {
         push(collapse(child.textContent ?? ''), flags, first && runs.length === 0)
@@ -110,10 +192,15 @@ export function runsOf(
         continue
       }
       if (tag === 'img') continue
-      const next = {
+      const next: RunFlags = {
         ...(flags.bold === true || tag === 'strong' || tag === 'b' ? { bold: true } : {}),
         ...(flags.italic === true || tag === 'em' || tag === 'i' ? { italic: true } : {}),
         ...(flags.code === true || tag === 'code' || tag === 'kbd' || tag === 'samp' ? { code: true } : {}),
+        ...(flags.underline === true || tag === 'u' || tag === 'ins' ? { underline: true } : {}),
+        ...(flags.strike === true || tag === 's' || tag === 'del' || tag === 'strike' ? { strike: true } : {}),
+        ...(flags.sup === true || tag === 'sup' ? { sup: true } : {}),
+        ...(flags.sub === true || tag === 'sub' ? { sub: true } : {}),
+        ...inlineColors(child as Element, flags),
       }
       walk(child, INLINE_TAGS.has(tag) ? next : flags, first)
     }
@@ -194,13 +281,19 @@ export function blocksFromElement(root: Element): Block[] {
       const level = HEADING_LEVELS[tag]
       if (level !== undefined) {
         const runs = runsOf(child)
-        if (runs.length > 0) blocks.push({ kind: 'heading', level, runs })
+        const align = alignOf(child)
+        if (runs.length > 0) {
+          blocks.push({ kind: 'heading', level, runs, ...(align === undefined ? {} : { align }) })
+        }
         continue
       }
       if (tag === 'p') {
         const images = [...child.querySelectorAll('img')]
         const runs = runsOf(child)
-        if (runs.length > 0) blocks.push({ kind: 'paragraph', runs })
+        const align = alignOf(child)
+        if (runs.length > 0) {
+          blocks.push({ kind: 'paragraph', runs, ...(align === undefined ? {} : { align }) })
+        }
         for (const image of images) {
           const block = imageBlock(image)
           if (block !== undefined) blocks.push(block)
@@ -226,7 +319,10 @@ export function blocksFromElement(root: Element): Block[] {
       if (tag === 'blockquote') {
         for (const inner of child.querySelectorAll('p')) {
           const runs = runsOf(inner)
-          if (runs.length > 0) blocks.push({ kind: 'quote', runs })
+          const align = alignOf(inner)
+          if (runs.length > 0) {
+            blocks.push({ kind: 'quote', runs, ...(align === undefined ? {} : { align }) })
+          }
         }
         continue
       }

@@ -55,7 +55,7 @@ The right pane picks each tab's body from the file:
 | **Source code** | Syntax highlighting, line numbers, and a copy button for 24 grammars: TypeScript/JavaScript, shell, Python, Ruby, Go, Rust, Java, C, C++, C#, Kotlin, Swift, PHP, YAML, TOML, INI, HTML, CSS, SCSS, Less, SQL, XML, Lua, MDX |
 | **Images** | PNG, JPEG, GIF, WebP, AVIF, BMP, ICO and SVG, drawn to the pane. An SVG goes through `<img>`, so its scripts never run |
 | **PDF** | Drawn by the browser's own PDF reader, from the file's bytes — so its text is real text |
-| **Word, Excel, PowerPoint** | `.docx`, `.xlsx` and `.pptx` unpacked in the page: a document's headings, lists, tables, pictures and code; a workbook's sheets as a grid, with the dates it stores as numbers shown as dates; a deck's slides as an outline of their text and pictures |
+| **Word, Excel, PowerPoint** | `.docx`, `.xlsx` and `.pptx` unpacked in the page: a document's headings, lists, quotes, tables, pictures and code, with each run's basic formatting — bold, italic, underline, strikethrough, super- and subscript, colour, highlight — and a paragraph's alignment; a workbook's sheets as a grid, with the dates it stores as numbers shown as dates; a deck's slides as an outline of their text and pictures |
 | **Anything else** | Numbered plain text — an unmapped suffix (`.vue`, `.proto`, `.txt`) stays plain rather than guessing a wrong grammar. The legacy binary Office formats (`.doc`, `.xls`, `.ppt`) are not previewed: the pane says so and offers the download |
 
 A **Mermaid** code fence (` ```mermaid `) is a diagram, not source, so the pane
@@ -81,6 +81,9 @@ others alone.
 
 Every text body carries **Copy**, which copies the file's own text — a rendered
 Markdown document copies its Markdown source.
+
+Every control in the pane is an icon rather than a word: its tooltip and its
+accessible label name it, and a toggle states itself by its fill.
 
 A rendered Markdown or HTML document adds two rows to that menu — **PDF** and
 **Word** — and each **downloads a file directly**, with no print dialog:
@@ -199,11 +202,14 @@ restart the profile.
   diagram types Mermaid 11 carries; a malformed one keeps its source and names
   the failure above it.
 - **An Office preview is content, not layout.** A `.docx` shows its headings,
-  text, lists, tables and pictures; a `.xlsx` shows its cells' values; a `.pptx`
+  lists, quotes, tables and pictures, and the basic formatting its runs carry —
+  bold, italic, underline, strikethrough, super- and subscript, colour, highlight
+  — with each paragraph's alignment. A `.xlsx` shows its cells' values; a `.pptx`
   shows each slide's text and pictures. What is *not* there is everything that
-  needs a layout engine and the fonts the file names: colours and themes, column
-  widths, page breaks, headers and footers, charts, SmartArt, and animations.
-  Formulas show the value the file cached, not a recalculation.
+  needs a layout engine and the fonts the file names: font faces and sizes,
+  spacing and indents, columns and page breaks, headers and footers, table
+  borders and shading, charts, SmartArt, and animations. Formulas show the value
+  the file cached, not a recalculation.
 - **Only the OOXML formats are read.** `.doc`, `.xls` and `.ppt` are the older
   binary container, which this pane does not parse — it says so and offers the
   download instead.

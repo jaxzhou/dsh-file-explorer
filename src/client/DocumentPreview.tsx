@@ -13,10 +13,10 @@
  * is the honest ceiling of reading OOXML without a layout engine, and it is what
  * an outline of the file is for.
  */
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { bytesOfDataUrl } from './export/pdf.ts'
-import type { Block, InlineRun } from './export/model.ts'
+import type { Block, BlockAlign, InlineRun } from './export/model.ts'
 import type { OfficeDocument, OfficeKind, SheetTable, SlideContent } from './office/index.ts'
 import { readOfficeDocument } from './office/index.ts'
 import type { PreviewFile } from './store.ts'
@@ -60,17 +60,37 @@ export function PdfPreview({ file, name, t }: {
 }
 
 /**
- * One run of text, with the emphasis its source carried.
+ * A block's alignment, as the style it takes.
+ * @param align - the block's alignment, when it states one.
+ * @returns the style, or undefined to leave the block where it is.
+ */
+function alignStyle(align: BlockAlign | undefined): CSSProperties | undefined {
+  return align === undefined ? undefined : { textAlign: align }
+}
+
+/**
+ * One run of text, with the formatting its source carried.
+ *
+ * The wrappers nest in a fixed order — emphasis outside, script inside — so the
+ * same run always produces the same tree whatever order the document listed its
+ * properties in.
  * @param props - the run.
  * @returns the run as markup.
  */
 function Run({ run }: { run: InlineRun }): ReactNode {
-  const text = run.text
-  if (run.code === true) return <code>{text}</code>
-  if (run.bold === true && run.italic === true) return <strong><em>{text}</em></strong>
-  if (run.bold === true) return <strong>{text}</strong>
-  if (run.italic === true) return <em>{text}</em>
-  return <>{text}</>
+  let node: ReactNode = run.text
+  if (run.code === true) node = <code>{node}</code>
+  if (run.bold === true && run.italic === true) node = <strong><em>{node}</em></strong>
+  else if (run.bold === true) node = <strong>{node}</strong>
+  else if (run.italic === true) node = <em>{node}</em>
+  if (run.underline === true) node = <u>{node}</u>
+  if (run.strike === true) node = <s>{node}</s>
+  if (run.sup === true) node = <sup>{node}</sup>
+  else if (run.sub === true) node = <sub>{node}</sub>
+  if (run.color !== undefined || run.highlight !== undefined) {
+    node = <span style={{ color: run.color, backgroundColor: run.highlight }}>{node}</span>
+  }
+  return <>{node}</>
 }
 
 /**
@@ -91,19 +111,20 @@ function BlockView({ block }: { block: Block }): ReactNode {
   switch (block.kind) {
     case 'heading': {
       const runs = <Runs runs={block.runs} />
+      const style = alignStyle(block.align)
       switch (block.level) {
-        case 1: return <h1>{runs}</h1>
-        case 2: return <h2>{runs}</h2>
-        case 3: return <h3>{runs}</h3>
-        case 4: return <h4>{runs}</h4>
-        case 5: return <h5>{runs}</h5>
-        default: return <h6>{runs}</h6>
+        case 1: return <h1 style={style}>{runs}</h1>
+        case 2: return <h2 style={style}>{runs}</h2>
+        case 3: return <h3 style={style}>{runs}</h3>
+        case 4: return <h4 style={style}>{runs}</h4>
+        case 5: return <h5 style={style}>{runs}</h5>
+        default: return <h6 style={style}>{runs}</h6>
       }
     }
     case 'paragraph':
-      return <p><Runs runs={block.runs} /></p>
+      return <p style={alignStyle(block.align)}><Runs runs={block.runs} /></p>
     case 'quote':
-      return <blockquote><Runs runs={block.runs} /></blockquote>
+      return <blockquote style={alignStyle(block.align)}><Runs runs={block.runs} /></blockquote>
     case 'code':
       return <pre className="dsh-fe-doc-code">{block.text}</pre>
     case 'rule':

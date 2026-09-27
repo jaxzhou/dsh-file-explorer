@@ -17,7 +17,7 @@
  * it survives a document whose styles are named in a language this reader does
  * not know, and it is what the exporter writes.
  */
-import type { Block, InlineRun, TableCell } from '../export/model.ts'
+import type { Block, BlockAlign, InlineRun, TableCell } from '../export/model.ts'
 import { dataUrlOf, imageMediaTypeOf, resolvePart } from './binary.ts'
 import { readRelationships, type Relationship } from './package.ts'
 import {
@@ -49,9 +49,101 @@ interface RunStyle {
   readonly bold: boolean
   readonly italic: boolean
   readonly code: boolean
+  readonly underline: boolean
+  readonly strike: boolean
+  readonly sup: boolean
+  readonly sub: boolean
+  readonly color: string | undefined
+  readonly highlight: string | undefined
 }
 
-const PLAIN: RunStyle = { bold: false, italic: false, code: false }
+const PLAIN: RunStyle = {
+  bold: false, italic: false, code: false, underline: false, strike: false, sup: false, sub: false,
+  color: undefined, highlight: undefined,
+}
+
+/**
+ * Word's named highlight colours, as the CSS colours they mean.
+ *
+ * A highlight is a *name* in OOXML rather than a colour — `w:highlight
+ * w:val="yellow"` — so the two spellings have to be mapped in both directions,
+ * here and in the writer.
+ */
+const HIGHLIGHT_COLORS: Readonly<Record<string, string>> = {
+  black: '#000000', blue: '#0000ff', cyan: '#00ffff', green: '#00ff00', magenta: '#ff00ff',
+  red: '#ff0000', yellow: '#ffff00', white: '#ffffff', darkblue: '#000080', darkcyan: '#008080',
+  darkgreen: '#008000', darkmagenta: '#800080', darkred: '#800000', darkyellow: '#808000',
+  darkgray: '#808080', lightgray: '#c0c0c0',
+}
+
+/**
+ * The CSS colour a six-digit hex value means.
+ * @param value - the value as the document wrote it.
+ * @returns the colour, or undefined for `auto` and for anything that is not a
+ * hex value this model can carry.
+ */
+function hexColor(value: string | undefined): string | undefined {
+  return value !== undefined && /^[0-9a-fA-F]{6}$/.test(value) ? `#${value.toLowerCase()}` : undefined
+}
+
+/**
+ * Whether one run is underlined.
+ *
+ * `w:u` is not a toggle like `w:b`: it carries *which* rule to draw, and `none`
+ * is the one value that means there is no underline.
+ * @param properties - the run's `w:rPr`, when it has one.
+ * @returns whether the run is underlined.
+ */
+function underlineOn(properties: XmlElement | undefined): boolean {
+  if (properties === undefined) return false
+  const underline = elements(properties, 'u')[0]
+  if (underline === undefined) return false
+  const value = attribute(underline, 'val')
+  return value === undefined
+    || (value !== 'none' && value !== '0' && value !== 'false' && value !== 'off')
+}
+
+/**
+ * The colour one run is drawn in.
+ * @param properties - the run's `w:rPr`, when it has one.
+ * @returns the colour, or undefined when the document sets none.
+ */
+function colorOf(properties: XmlElement | undefined): string | undefined {
+  return hexColor(childValue(properties, 'color'))
+}
+
+/**
+ * The highlight behind one run.
+ *
+ * A named highlight is the usual spelling, but a shading fill is how a colour
+ * outside the named set is written; both are read, and the page's own white is
+ * not a highlight at all.
+ * @param properties - the run's `w:rPr`, when it has one.
+ * @returns the colour, or undefined when the run has no fill.
+ */
+function highlightOf(properties: XmlElement | undefined): string | undefined {
+  const named = childValue(properties, 'highlight')
+  if (named !== undefined) return HIGHLIGHT_COLORS[named.toLowerCase()]
+  if (properties === undefined) return undefined
+  const shading = elements(properties, 'shd')[0]
+  if (shading === undefined) return undefined
+  const fill = attribute(shading, 'fill')
+  return fill !== undefined && fill.toLowerCase() !== 'ffffff' ? hexColor(fill) : undefined
+}
+
+/**
+ * Where one paragraph's text sits across the column.
+ * @param properties - the paragraph's `w:pPr`, when it has one.
+ * @returns the alignment, or undefined for the left default and for the values
+ * this model does not carry.
+ */
+function alignOf(properties: XmlElement | undefined): BlockAlign | undefined {
+  const value = childValue(properties, 'jc')
+  if (value === 'center') return 'center'
+  if (value === 'right' || value === 'end') return 'right'
+  if (value === 'both' || value === 'distribute') return 'justify'
+  return undefined
+}
 
 /**
  * One child element's `w:val`, which is how OOXML states most of its properties.
@@ -89,22 +181,30 @@ function headingLevel(level: number): number {
 }
 
 /**
- * Read which style ids mean which heading level.
+ * Read which style ids mean which heading level, and which mean a quote.
  *
  * A style's outline level is authoritative; the id itself is the fallback, and
  * it is checked in both the English and the Chinese spelling because a document
  * written by a localized Word names its own styles.
  * @param zip - the open package.
- * @returns a level by style id.
+ * @returns the levels by style id, and the style ids that mean a quote.
  */
-async function readStyleHeadings(zip: ZipArchive): Promise<Map<string, number>> {
+async function readStyles(zip: ZipArchive): Promise<{
+  headings: Map<string, number>
+  quotes: Set<string>
+}> {
   const headings = new Map<string, number>()
+  const quotes = new Set<string>()
   const text = await zip.text('word/styles.xml')
-  if (text === undefined) return headings
+  if (text === undefined) return { headings, quotes }
   for (const style of descendants(parseXml(text), 'style')) {
     if (attribute(style, 'type') !== 'paragraph') continue
     const id = attribute(style, 'styleId')
     if (id === undefined) continue
+    // A style's own name is what a localized Word writes; the id is what a
+    // document written in English carries.
+    const name = childValue(style, 'name')
+    if (isQuoteName(id) || (name !== undefined && isQuoteName(name))) quotes.add(id)
     const outline = childValue(elements(style, 'pPr')[0], 'outlineLvl')
     if (outline !== undefined) {
       const level = Number(outline)
@@ -116,7 +216,16 @@ async function readStyleHeadings(zip: ZipArchive): Promise<Map<string, number>> 
     if (named !== null) headings.set(id, headingLevel(Number(named[1])))
     else if (/^(?:title|标题)$/i.test(id.trim())) headings.set(id, 1)
   }
-  return headings
+  return { headings, quotes }
+}
+
+/**
+ * Whether one style id or style name means a quote.
+ * @param value - the style's id or its name.
+ * @returns whether it is the quote style.
+ */
+function isQuoteName(value: string): boolean {
+  return /^(?:quote|blockquote|引用)$/i.test(value.trim())
 }
 
 /**
@@ -192,11 +301,7 @@ async function readMedia(
 function pushText(runs: InlineRun[], text: string, style: RunStyle): void {
   if (text === '') return
   const previous = runs.at(-1)
-  const same = previous !== undefined
-    && (previous.bold === true) === style.bold
-    && (previous.italic === true) === style.italic
-    && (previous.code === true) === style.code
-  if (same && previous !== undefined) {
+  if (previous !== undefined && sameStyle(previous, style)) {
     runs[runs.length - 1] = { ...previous, text: previous.text + text }
     return
   }
@@ -205,7 +310,32 @@ function pushText(runs: InlineRun[], text: string, style: RunStyle): void {
     ...(style.bold ? { bold: true } : {}),
     ...(style.italic ? { italic: true } : {}),
     ...(style.code ? { code: true } : {}),
+    ...(style.underline ? { underline: true } : {}),
+    ...(style.strike ? { strike: true } : {}),
+    ...(style.sup ? { sup: true } : {}),
+    ...(style.sub ? { sub: true } : {}),
+    ...(style.color === undefined ? {} : { color: style.color }),
+    ...(style.highlight === undefined ? {} : { highlight: style.highlight }),
   })
+}
+
+/**
+ * Whether a run already in the list carries the same emphasis as the text
+ * arriving, which is what lets the two become one run.
+ * @param run - the run already there.
+ * @param style - the emphasis the arriving text carries.
+ * @returns whether they merge.
+ */
+function sameStyle(run: InlineRun, style: RunStyle): boolean {
+  return (run.bold === true) === style.bold
+    && (run.italic === true) === style.italic
+    && (run.code === true) === style.code
+    && (run.underline === true) === style.underline
+    && (run.strike === true) === style.strike
+    && (run.sup === true) === style.sup
+    && (run.sub === true) === style.sub
+    && (run.color ?? '') === (style.color ?? '')
+    && (run.highlight ?? '') === (style.highlight ?? '')
 }
 
 /**
@@ -231,10 +361,17 @@ function pushRun(run: XmlElement, inherited: RunStyle, runs: InlineRun[]): void 
   const properties = elements(run, 'rPr')[0]
   const toggle = (local: string): boolean =>
     isOn(properties === undefined ? undefined : elements(properties, local)[0])
+  const vertical = childValue(properties, 'vertAlign')
   const style: RunStyle = {
     bold: inherited.bold || toggle('b'),
     italic: inherited.italic || toggle('i'),
     code: inherited.code || isCodeFont(properties),
+    underline: inherited.underline || underlineOn(properties),
+    strike: inherited.strike || toggle('strike') || toggle('dstrike'),
+    sup: inherited.sup || vertical === 'superscript',
+    sub: inherited.sub || vertical === 'subscript',
+    color: colorOf(properties) ?? inherited.color,
+    highlight: highlightOf(properties) ?? inherited.highlight,
   }
   let text = ''
   for (const node of run.children) {
@@ -353,7 +490,7 @@ export async function readWord(bytes: Uint8Array): Promise<WordDocument> {
   }
   const relationships = await readRelationships(zip, 'word/document.xml')
   const { media, truncated: mediaTruncated } = await readMedia(zip, relationships)
-  const styles = await readStyleHeadings(zip)
+  const styles = await readStyles(zip)
   const numbering = await readNumbering(zip)
 
   const blocks: Block[] = []
@@ -373,15 +510,18 @@ export async function readWord(bytes: Uint8Array): Promise<WordDocument> {
       ? headingLevel(Number(outline) + 1)
       : styleId === undefined
         ? undefined
-        : styles.get(styleId)
+        : styles.headings.get(styleId)
+    const align = alignOf(properties)
     if (runs.length > 0) {
       if (level !== undefined) {
-        blocks.push({ kind: 'heading', level, runs })
+        blocks.push({ kind: 'heading', level, runs, ...(align === undefined ? {} : { align }) })
+      } else if (styleId !== undefined && styles.quotes.has(styleId)) {
+        blocks.push({ kind: 'quote', runs, ...(align === undefined ? {} : { align }) })
       } else {
         const numberingProperties = properties === undefined ? undefined : elements(properties, 'numPr')[0]
         const numberingId = childValue(numberingProperties, 'numId')
         if (numberingId === undefined) {
-          blocks.push({ kind: 'paragraph', runs })
+          blocks.push({ kind: 'paragraph', runs, ...(align === undefined ? {} : { align }) })
         } else {
           const depth = Number(childValue(numberingProperties, 'ilvl') ?? '0')
           const format = numbering.get(numberingId)?.get(Number.isFinite(depth) ? depth : 0)
