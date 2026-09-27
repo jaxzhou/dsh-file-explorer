@@ -1,9 +1,9 @@
 # dsh-file-explorer
 
 [![npm](https://img.shields.io/npm/v/@jaxzhou/dsh-file-explorer.svg)](https://www.npmjs.com/package/@jaxzhou/dsh-file-explorer)
-[![license](https://img.shields.io/npm/l/@jaxzhou/dsh-file-explorer.svg)](LICENSE)
+[![license](https://img.shields.io/npm/l/@jaxzhou/dsh-file-explorer.svg)](../LICENSE)
 
-[English](README.md) | 中文
+[English](../README.md) | 中文
 
 > npm 包名是 **`@jaxzhou/dsh-file-explorer`** —— 无作用域的 `dsh-file-explorer`
 > 属于另一位作者的插件。
@@ -21,7 +21,7 @@ dsh --profile web
 
 ## 演示
 
-[![文件标签与对话、轨迹并列：左侧是工作区目录树，右侧是渲染后的 Markdown 文档](media/demo.gif)](media/demo.mp4)
+[![文件标签与对话、轨迹并列：左侧是工作区目录树，右侧是渲染后的 Markdown 文档](../media/demo.gif)](../media/demo.mp4)
 
 *15 秒录屏 —— 点击可打开完整画质的 MP4。* 一个小数学工作区：渲染后的讲义文档
 （含表格）、切到 **源码** 看它背后的 Markdown、在旁边用另一个标签打开第二份文档，
@@ -49,7 +49,7 @@ dsh --profile web
 | **源码** | 24 种语法的语法高亮、行号与复制按钮：TypeScript/JavaScript、shell、Python、Ruby、Go、Rust、Java、C、C++、C#、Kotlin、Swift、PHP、YAML、TOML、INI、HTML、CSS、SCSS、Less、SQL、XML、Lua、MDX |
 | **图片** | PNG、JPEG、GIF、WebP、AVIF、BMP、ICO、SVG，自动适配窗格。SVG 经 `<img>` 绘制，其中的脚本不会执行 |
 | **PDF** | 交由浏览器自带的 PDF 阅读器绘制，用的是文件自身的字节 —— 因此其中的文字是真文字 |
-| **Word / Excel / PowerPoint** | `.docx`、`.xlsx`、`.pptx` 在页面内解包：文档的标题、列表、引用、表格、图片与代码，并保留每段文字的基础格式——粗体、斜体、下划线、删除线、上/下标、颜色、高亮——以及段落的对齐方式；工作簿按工作表显示为网格，并以日期显示它按数字存储的日期；演示文稿按幻灯片显示其文字与图片的提纲 |
+| **Word / Excel / PowerPoint** | `.docx`、`.xlsx`、`.pptx` 在页面内解包：文档的标题、列表、引用、表格、图片与代码，并按**文档自身的格式**绘制——每段文字的**字体、字号**、粗体、斜体、下划线、删除线、上/下标、颜色与高亮，以及每个段落的对齐、缩进与间距，全部经**样式级联**解析而不是只看 run 上写了什么；工作簿按工作表显示为网格，并以日期显示它按数字存储的日期；演示文稿按幻灯片显示其文字与图片的提纲 |
 | **其它** | 带行号的纯文本 —— 未映射的后缀（`.vue`、`.proto`、`.txt`）保持纯文本，而不是猜测一个错误的高亮。旧版二进制 Office 格式（`.doc`、`.xls`、`.ppt`）不做预览：窗格会说明原因并提供下载 |
 
 **Mermaid** 代码围栏（` ```mermaid `）是图表而不是源码，窗格会把它画出来：
@@ -173,11 +173,13 @@ profile。
   其中的标签不可选中，且始终以白底绘制：PDF 页面与 Word 文档都是白底，为深色窗格
   绘制的图在它们上面会看不见。绘制范围是 Mermaid 11 支持的图表类型；语法错误的
   图表会保留源码，并在上方说明失败原因。
-- **Office 预览是内容，不是排版**：`.docx` 显示标题、列表、引用、表格、图片，以及每段
-  文字的基础格式——粗体、斜体、下划线、删除线、上/下标、颜色、高亮——和段落的对齐
-  方式；`.xlsx` 显示单元格的值；`.pptx` 显示每页的文字与图片。**没有**的是所有需要
-  排版引擎和文件所指定字体的东西：字体与字号、行距与缩进、分栏与分页、页眉页脚、
-  表格边框与底纹、图表、SmartArt、动画。公式显示文件缓存的值，不做重算。
+- **Office 预览是内容，不是排版**：`.docx` 显示标题、列表、引用、表格、图片，以及文档
+  自身携带的格式 —— 每段文字的字体、字号、字重、下划线、删除线、上/下标、颜色与高亮，
+  每个段落的对齐、缩进与间距 —— 这些都经**样式级联**解析，所以「格式定义在样式里而不是
+  写在 run 上」的文字也会按文档的本意绘制。**没有**的是所有需要排版引擎的东西：分栏与
+  分页、页眉页脚、表格边框与底纹、文本框、图表、SmartArt、动画。**主题字体**同样不解析
+  —— 引用主题的 run 使用页面自身的默认字体，而不是去猜主题是什么。`.xlsx` 显示单元格的
+  值；`.pptx` 显示每页的文字与图片。公式显示文件缓存的值，不做重算。
 - **只读取 OOXML 格式**：`.doc`、`.xls`、`.ppt` 是更早的二进制容器，本窗格不解析
   —— 会说明这一点并提供下载。
 - **预览受「完整读取」上限约束**：官方 Web 组合默认 32 MiB，超过的 PDF 或 Office
@@ -191,8 +193,8 @@ profile。
 ## 参与开发
 
 构建、检查、产物模型，以及客户端 bundle 如何抵达浏览器：
-[CONTRIBUTING.md](CONTRIBUTING.md)。
+[CONTRIBUTING.md](../CONTRIBUTING.md)。
 
 ## 许可证
 
-MIT —— 见 [LICENSE](LICENSE)。
+MIT —— 见 [LICENSE](../LICENSE)。

@@ -30,6 +30,10 @@ export interface InlineRun {
   readonly color?: string
   /** The highlight behind the run, as a CSS colour, when the document sets one. */
   readonly highlight?: string
+  /** Font size in CSS pixels, when the document or a style sets one. */
+  readonly size?: number
+  /** Font family, when the document or a style names one rather than a theme. */
+  readonly font?: string
 }
 
 /**
@@ -39,6 +43,27 @@ export interface InlineRun {
  * says anything about alignment carries nothing here.
  */
 export type BlockAlign = 'center' | 'right' | 'justify'
+
+/**
+ * The block-level formatting one paragraph carries.
+ *
+ * Every field is optional and every one is *resolved*: in OOXML most of this
+ * lives on a paragraph style rather than on the paragraph, so what arrives here
+ * is the result of the style chain, not what one element happened to say.
+ */
+export interface BlockMetrics {
+  readonly align?: BlockAlign
+  /** Left indent in CSS pixels. */
+  readonly indent?: number
+  /** First-line indent in CSS pixels; negative is a hanging indent. */
+  readonly firstLine?: number
+  /** Space above the paragraph, in CSS pixels. */
+  readonly before?: number
+  /** Space below the paragraph, in CSS pixels. */
+  readonly after?: number
+  /** Line height as a multiple of the font size. */
+  readonly lineHeight?: number
+}
 
 /** One table cell, as the runs it holds. */
 export interface TableCell {
@@ -51,19 +76,25 @@ export type Block =
     readonly kind: 'heading'
     readonly level: number
     readonly runs: readonly InlineRun[]
-    readonly align?: BlockAlign
+    readonly metrics?: BlockMetrics
   }
   | {
     readonly kind: 'paragraph'
     readonly runs: readonly InlineRun[]
-    readonly align?: BlockAlign
+    readonly metrics?: BlockMetrics
   }
   | {
     readonly kind: 'quote'
     readonly runs: readonly InlineRun[]
-    readonly align?: BlockAlign
+    readonly metrics?: BlockMetrics
   }
-  | { readonly kind: 'list'; readonly ordered: boolean; readonly depth: number; readonly runs: readonly InlineRun[] }
+  | {
+    readonly kind: 'list'
+    readonly ordered: boolean
+    readonly depth: number
+    readonly runs: readonly InlineRun[]
+    readonly metrics?: BlockMetrics
+  }
   | { readonly kind: 'code'; readonly text: string }
   | { readonly kind: 'rule' }
   | { readonly kind: 'table'; readonly rows: readonly { readonly cells: readonly TableCell[] }[] }
@@ -110,31 +141,38 @@ function sameRunStyle(left: InlineRun, right: RunFlags): boolean {
 }
 
 /**
- * The colour and highlight an element's own inline style carries, if any.
+ * The run properties an element's own inline style carries, if any.
  * @param element - the element being entered.
  * @param inherited - the emphasis carried in from an ancestor.
- * @returns the colour fields, carrying the inherited ones forward when this
- * element says nothing about them.
+ * @returns the run fields, carrying the inherited ones forward when this element
+ * says nothing about them.
  */
-function inlineColors(element: Element, inherited: RunFlags): RunFlags {
+function inlineRunStyle(element: Element, inherited: RunFlags): RunFlags {
   const style = (element as HTMLElement).style
   const color = style === undefined || style.color === '' ? inherited.color : style.color
   const background = style === undefined ? '' : style.backgroundColor
   const highlight = background === '' || background === 'transparent' ? inherited.highlight : background
+  const font = style === undefined || style.fontFamily === '' ? inherited.font : style.fontFamily
+  const size = style === undefined || style.fontSize === ''
+    ? inherited.size
+    : Number.parseFloat(style.fontSize)
   return {
     ...(color === undefined ? {} : { color }),
     ...(highlight === undefined ? {} : { highlight }),
+    ...(font === undefined ? {} : { font }),
+    ...(size === undefined || !Number.isFinite(size) ? {} : { size }),
   }
 }
 
 /**
- * Where one element's text sits across the column.
+ * The block metrics one element's own inline style states.
  * @param element - the element.
- * @returns its alignment, or undefined when it states none this model carries.
+ * @returns its metrics, or undefined when it states none this model carries.
  */
-function alignOf(element: Element): BlockAlign | undefined {
+function metricsOf(element: Element): BlockMetrics | undefined {
   const value = (element as HTMLElement).style?.textAlign
-  return value === 'center' || value === 'right' || value === 'justify' ? value : undefined
+  if (value !== 'center' && value !== 'right' && value !== 'justify') return undefined
+  return { align: value }
 }
 
 /** Heading tag name to level. */
@@ -200,7 +238,7 @@ export function runsOf(
         ...(flags.strike === true || tag === 's' || tag === 'del' || tag === 'strike' ? { strike: true } : {}),
         ...(flags.sup === true || tag === 'sup' ? { sup: true } : {}),
         ...(flags.sub === true || tag === 'sub' ? { sub: true } : {}),
-        ...inlineColors(child as Element, flags),
+        ...inlineRunStyle(child as Element, flags),
       }
       walk(child, INLINE_TAGS.has(tag) ? next : flags, first)
     }
@@ -281,18 +319,18 @@ export function blocksFromElement(root: Element): Block[] {
       const level = HEADING_LEVELS[tag]
       if (level !== undefined) {
         const runs = runsOf(child)
-        const align = alignOf(child)
+        const metrics = metricsOf(child)
         if (runs.length > 0) {
-          blocks.push({ kind: 'heading', level, runs, ...(align === undefined ? {} : { align }) })
+          blocks.push({ kind: 'heading', level, runs, ...(metrics === undefined ? {} : { metrics }) })
         }
         continue
       }
       if (tag === 'p') {
         const images = [...child.querySelectorAll('img')]
         const runs = runsOf(child)
-        const align = alignOf(child)
+        const metrics = metricsOf(child)
         if (runs.length > 0) {
-          blocks.push({ kind: 'paragraph', runs, ...(align === undefined ? {} : { align }) })
+          blocks.push({ kind: 'paragraph', runs, ...(metrics === undefined ? {} : { metrics }) })
         }
         for (const image of images) {
           const block = imageBlock(image)
@@ -319,9 +357,9 @@ export function blocksFromElement(root: Element): Block[] {
       if (tag === 'blockquote') {
         for (const inner of child.querySelectorAll('p')) {
           const runs = runsOf(inner)
-          const align = alignOf(inner)
+          const metrics = metricsOf(inner)
           if (runs.length > 0) {
-            blocks.push({ kind: 'quote', runs, ...(align === undefined ? {} : { align }) })
+            blocks.push({ kind: 'quote', runs, ...(metrics === undefined ? {} : { metrics }) })
           }
         }
         continue

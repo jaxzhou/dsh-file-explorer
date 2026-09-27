@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/@jaxzhou/dsh-file-explorer.svg)](https://www.npmjs.com/package/@jaxzhou/dsh-file-explorer)
 [![license](https://img.shields.io/npm/l/@jaxzhou/dsh-file-explorer.svg)](LICENSE)
 
-English | [中文](README.zh.md)
+English | [中文](docs/README.zh.md)
 
 > Published on npm as **`@jaxzhou/dsh-file-explorer`** — the unscoped name
 > `dsh-file-explorer` belongs to a different author's plugin.
@@ -55,7 +55,7 @@ The right pane picks each tab's body from the file:
 | **Source code** | Syntax highlighting, line numbers, and a copy button for 24 grammars: TypeScript/JavaScript, shell, Python, Ruby, Go, Rust, Java, C, C++, C#, Kotlin, Swift, PHP, YAML, TOML, INI, HTML, CSS, SCSS, Less, SQL, XML, Lua, MDX |
 | **Images** | PNG, JPEG, GIF, WebP, AVIF, BMP, ICO and SVG, drawn to the pane. An SVG goes through `<img>`, so its scripts never run |
 | **PDF** | Drawn by the browser's own PDF reader, from the file's bytes — so its text is real text |
-| **Word, Excel, PowerPoint** | `.docx`, `.xlsx` and `.pptx` unpacked in the page: a document's headings, lists, quotes, tables, pictures and code, with each run's basic formatting — bold, italic, underline, strikethrough, super- and subscript, colour, highlight — and a paragraph's alignment; a workbook's sheets as a grid, with the dates it stores as numbers shown as dates; a deck's slides as an outline of their text and pictures |
+| **Word, Excel, PowerPoint** | `.docx`, `.xlsx` and `.pptx` unpacked in the page: a document's headings, lists, quotes, tables, pictures and code, drawn with the formatting the document itself carries — each run's **font, size**, bold, italic, underline, strikethrough, super- and subscript, colour and highlight, and each paragraph's alignment, indents and spacing, all read through its style chain rather than off the run; a workbook's sheets as a grid, with the dates it stores as numbers shown as dates; a deck's slides as an outline of their text and pictures |
 | **Anything else** | Numbered plain text — an unmapped suffix (`.vue`, `.proto`, `.txt`) stays plain rather than guessing a wrong grammar. The legacy binary Office formats (`.doc`, `.xls`, `.ppt`) are not previewed: the pane says so and offers the download |
 
 A **Mermaid** code fence (` ```mermaid `) is a diagram, not source, so the pane
@@ -202,14 +202,17 @@ restart the profile.
   diagram types Mermaid 11 carries; a malformed one keeps its source and names
   the failure above it.
 - **An Office preview is content, not layout.** A `.docx` shows its headings,
-  lists, quotes, tables and pictures, and the basic formatting its runs carry —
-  bold, italic, underline, strikethrough, super- and subscript, colour, highlight
-  — with each paragraph's alignment. A `.xlsx` shows its cells' values; a `.pptx`
-  shows each slide's text and pictures. What is *not* there is everything that
-  needs a layout engine and the fonts the file names: font faces and sizes,
-  spacing and indents, columns and page breaks, headers and footers, table
-  borders and shading, charts, SmartArt, and animations. Formulas show the value
-  the file cached, not a recalculation.
+  lists, quotes, tables and pictures, and the formatting the document carries:
+  each run's font, size, weight, underline, strikethrough, super- and subscript,
+  colour and highlight, and each paragraph's alignment, indents and spacing —
+  resolved through the document's style chain, so text that is styled by a
+  *style* rather than by the run is drawn the way the document means it. What is
+  *not* there is everything that needs a layout engine: columns and page breaks,
+  headers and footers, table borders and shading, text boxes, charts, SmartArt,
+  and animations. A *theme* font is not resolved either — a run that names a
+  theme gets the page's own default rather than a guess at what the theme says.
+  A `.xlsx` shows its cells' values; a `.pptx` shows each slide's text and
+  pictures. Formulas show the value the file cached, not a recalculation.
 - **Only the OOXML formats are read.** `.doc`, `.xls` and `.ppt` are the older
   binary container, which this pane does not parse — it says so and offers the
   download instead.

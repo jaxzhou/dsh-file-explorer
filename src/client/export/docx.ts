@@ -11,7 +11,7 @@
  * applied directly on runs and paragraphs rather than through a styles part, which
  * removes a whole file from the package and a class of "style not found" failures.
  */
-import type { Block, BlockAlign, InlineRun } from './model.ts'
+import type { Block, BlockAlign, BlockMetrics, InlineRun } from './model.ts'
 import { bytesOfDataUrl } from './pdf.ts'
 import { zip, type ZipPart } from './zip.ts'
 
@@ -77,6 +77,61 @@ function alignXml(align: BlockAlign | undefined): string {
   return `<w:jc w:val="${align === 'justify' ? 'both' : align}"/>`
 }
 
+/** Twips, a twentieth of a point, per CSS pixel at 96 dpi. */
+const TWIPS_PER_PX = 15
+
+/**
+ * One block's indents as `w:ind`.
+ * @param metrics - the block's metrics, when it has any.
+ * @returns the property, or an empty string when neither indent is stated.
+ */
+function indentXml(metrics: BlockMetrics | undefined): string {
+  const left = metrics?.indent === undefined ? undefined : Math.round(metrics.indent * TWIPS_PER_PX)
+  const first = metrics?.firstLine === undefined
+    ? undefined
+    : Math.round(metrics.firstLine * TWIPS_PER_PX)
+  if (left === undefined && first === undefined) return ''
+  return '<w:ind'
+    + (left === undefined ? '' : ` w:left="${left}"`)
+    + (first === undefined
+      ? ''
+      : first < 0 ? ` w:hanging="${-first}"` : ` w:firstLine="${first}"`)
+    + '/>'
+}
+
+/**
+ * One block's spacing as `w:spacing`, keeping the writer's own defaults where the
+ * block states nothing.
+ * @param metrics - the block's metrics, when it has any.
+ * @param before - the space above, in twips, when the block states none.
+ * @param after - the space below, in twips, when the block states none.
+ * @returns the property.
+ */
+function spacingXml(
+  metrics: BlockMetrics | undefined,
+  before: number | undefined,
+  after: number,
+): string {
+  const above = metrics?.before === undefined ? before : Math.round(metrics.before * TWIPS_PER_PX)
+  const below = metrics?.after === undefined ? after : Math.round(metrics.after * TWIPS_PER_PX)
+  const line = metrics?.lineHeight === undefined ? undefined : Math.round(metrics.lineHeight * 240)
+  return '<w:spacing'
+    + (above === undefined ? '' : ` w:before="${above}"`)
+    + ` w:after="${below}"`
+    + (line === undefined ? '' : ` w:line="${line}" w:lineRule="auto"`)
+    + '/>'
+}
+
+/**
+ * The first family of a CSS font stack, which is the one OOXML can state.
+ * @param value - the CSS font stack.
+ * @returns the family name, or undefined when the stack names none.
+ */
+function ooxmlFont(value: string): string | undefined {
+  const first = value.split(',')[0]?.trim().replace(/^["']|["']$/g, '')
+  return first === undefined || first === '' ? undefined : first
+}
+
 /**
  * One run of text as `w:r`.
  * @param run - the run, with its emphasis.
@@ -85,6 +140,9 @@ function alignXml(align: BlockAlign | undefined): string {
 function runXml(run: InlineRun): string {
   const color = run.color === undefined ? undefined : ooxmlHex(run.color)
   const highlight = run.highlight === undefined ? undefined : ooxmlHex(run.highlight)
+  // CSS pixels back into the half-points `w:sz` counts in.
+  const size = run.size === undefined ? undefined : Math.round(run.size * 1.5)
+  const font = run.font === undefined ? undefined : ooxmlFont(run.font)
   const properties = [
     run.bold === true ? '<w:b/>' : '',
     run.italic === true ? '<w:i/>' : '',
@@ -97,7 +155,12 @@ function runXml(run: InlineRun): string {
     // colours, and a fill covers the one the document actually used. The reader
     // takes either spelling.
     highlight === undefined ? '' : `<w:shd w:val="clear" w:color="auto" w:fill="${highlight}"/>`,
-    run.code === true ? '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/>' : '',
+    size === undefined ? '' : `<w:sz w:val="${size}"/><w:szCs w:val="${size}"/>`,
+    // The three faces an OOXML run may name; a font stack's first entry serves
+    // all of them, which is what a document with one font means.
+    font === undefined
+      ? run.code === true ? '<w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/>' : ''
+      : `<w:rFonts w:ascii="${xml(font)}" w:hAnsi="${xml(font)}" w:eastAsia="${xml(font)}"/>`,
   ].join('')
   const prefix = properties === '' ? '' : `<w:rPr>${properties}</w:rPr>`
   // A newline inside a run is a line break, not a paragraph separator.
@@ -187,19 +250,27 @@ export function docxFromBlocks(blocks: readonly Block[], title: string): Uint8Ar
           // paragraph: Word reads it as one, and it is direct formatting, so the
           // package still needs no styles part for the style to resolve. It is
           // also what the reader next door finds a heading by.
-          alignXml(block.align)
+          alignXml(block.metrics?.align)
           + `<w:outlineLvl w:val="${block.level - 1}"/>`
-          + `<w:spacing w:before="240" w:after="120"/><w:rPr><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr>`,
+          + spacingXml(block.metrics, 240, 120)
+          + `<w:rPr><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr>`,
         ))
         break
       }
       case 'paragraph':
-        body.push(paragraphXml(block.runs, `${alignXml(block.align)}<w:spacing w:after="120"/>`))
+        body.push(paragraphXml(
+          block.runs,
+          alignXml(block.metrics?.align) + indentXml(block.metrics) + spacingXml(block.metrics, undefined, 120),
+        ))
         break
       case 'quote':
         body.push(paragraphXml(
           block.runs.map(run => ({ ...run, italic: true })),
-          `${alignXml(block.align)}<w:ind w:left="480"/><w:spacing w:after="120"/>`,
+          // An indented run is what makes a quote read as one in a package with
+          // no styles part; a document that states its own indent keeps it.
+          alignXml(block.metrics?.align)
+          + (indentXml(block.metrics) === '' ? '<w:ind w:left="480"/>' : indentXml(block.metrics))
+          + spacingXml(block.metrics, undefined, 120),
         ))
         break
       case 'list': {

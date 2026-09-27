@@ -17,7 +17,7 @@
  * it survives a document whose styles are named in a language this reader does
  * not know, and it is what the exporter writes.
  */
-import type { Block, BlockAlign, InlineRun, TableCell } from '../export/model.ts'
+import type { Block, BlockAlign, BlockMetrics, InlineRun, TableCell } from '../export/model.ts'
 import { dataUrlOf, imageMediaTypeOf, resolvePart } from './binary.ts'
 import { readRelationships, type Relationship } from './package.ts'
 import {
@@ -55,11 +55,91 @@ interface RunStyle {
   readonly sub: boolean
   readonly color: string | undefined
   readonly highlight: string | undefined
+  readonly size: number | undefined
+  readonly font: string | undefined
 }
 
 const PLAIN: RunStyle = {
   bold: false, italic: false, code: false, underline: false, strike: false, sup: false, sub: false,
-  color: undefined, highlight: undefined,
+  color: undefined, highlight: undefined, size: undefined, font: undefined,
+}
+
+/**
+ * The block-level formatting one paragraph ends up with.
+ *
+ * In OOXML most of this lives on the paragraph *style* rather than on the
+ * paragraph — a document's Normal style carrying `w:jc` is what justifies every
+ * body paragraph in it — so these are resolved through the style chain rather
+ * than read off one element.
+ */
+interface ParagraphStyle {
+  readonly align: BlockAlign | undefined
+  readonly indent: number | undefined
+  readonly firstLine: number | undefined
+  readonly before: number | undefined
+  readonly after: number | undefined
+  readonly lineHeight: number | undefined
+}
+
+const PLAIN_PARAGRAPH: ParagraphStyle = {
+  align: undefined, indent: undefined, firstLine: undefined, before: undefined, after: undefined,
+  lineHeight: undefined,
+}
+
+/** One style, as the styles part defines it. */
+interface StyleDefinition {
+  /** The style's id, which is what an element names it by. */
+  readonly id: string
+  readonly type: string
+  readonly name: string | undefined
+  readonly basedOn: string | undefined
+  readonly runProperties: XmlElement | undefined
+  readonly paragraphProperties: XmlElement | undefined
+}
+
+/** Every style a document defines, and the defaults beneath them. */
+interface StyleTable {
+  /** The run properties every run starts from, from `w:docDefaults`. */
+  readonly defaultRun: XmlElement | undefined
+  /** The paragraph style that applies where a paragraph names none. */
+  readonly defaultParagraph: string | undefined
+  readonly byId: ReadonlyMap<string, StyleDefinition>
+}
+
+/** Twips (a twentieth of a point) to CSS pixels at 96 dpi. */
+function twipsToPx(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined
+  const twips = Number(value)
+  return Number.isFinite(twips) ? Math.round((twips / 20) * (96 / 72)) : undefined
+}
+
+/** Half-points, which is how OOXML states a font size, to CSS pixels. */
+function halfPointsToPx(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined
+  const half = Number(value)
+  return Number.isFinite(half) && half > 0 ? Math.round((half / 2) * (96 / 72)) : undefined
+}
+
+/**
+ * The font family one run properties element names.
+ *
+ * A theme reference (`w:asciiTheme`) is not a font name, and resolving one means
+ * reading the theme part; the page's own default is a better answer than a guess,
+ * so only named faces count here.
+ * @param properties - the `w:rPr` element, when there is one.
+ * @returns a CSS font stack, or undefined.
+ */
+function fontOf(properties: XmlElement | undefined): string | undefined {
+  if (properties === undefined) return undefined
+  const fonts = elements(properties, 'rFonts')[0]
+  if (fonts === undefined) return undefined
+  const names = ['eastAsia', 'ascii', 'hAnsi']
+    .map(local => attribute(fonts, local))
+    .filter((name): name is string => name !== undefined && name !== '')
+  const unique = [...new Set(names)]
+  return unique.length === 0
+    ? undefined
+    : unique.map(name => (/\s/.test(name) ? `"${name}"` : name)).join(', ')
 }
 
 /**
@@ -94,10 +174,10 @@ function hexColor(value: string | undefined): string | undefined {
  * @param properties - the run's `w:rPr`, when it has one.
  * @returns whether the run is underlined.
  */
-function underlineOn(properties: XmlElement | undefined): boolean {
-  if (properties === undefined) return false
+function underlineOf(properties: XmlElement | undefined): boolean | undefined {
+  if (properties === undefined) return undefined
   const underline = elements(properties, 'u')[0]
-  if (underline === undefined) return false
+  if (underline === undefined) return undefined
   const value = attribute(underline, 'val')
   return value === undefined
     || (value !== 'none' && value !== '0' && value !== 'false' && value !== 'off')
@@ -146,6 +226,163 @@ function alignOf(properties: XmlElement | undefined): BlockAlign | undefined {
 }
 
 /**
+ * The first-line indent one `w:ind` states, as pixels.
+ * @param indent - the `w:ind` element, when there is one.
+ * @returns the indent, positive for a first-line indent and negative for a
+ * hanging one.
+ */
+function firstLineOf(indent: XmlElement | undefined): number | undefined {
+  if (indent === undefined) return undefined
+  const first = twipsToPx(attribute(indent, 'firstLine'))
+  if (first !== undefined) return first
+  const hanging = twipsToPx(attribute(indent, 'hanging'))
+  return hanging === undefined ? undefined : -hanging
+}
+
+/**
+ * Fold one run properties element into a run style.
+ *
+ * A property the element *states* wins, including when it states it off — a
+ * later style turning bold off is as meaningful as one turning it on. A property
+ * it does not mention leaves the inherited value alone, which is what makes this
+ * fold a cascade rather than an override.
+ * @param style - the style inherited so far.
+ * @param properties - the `w:rPr` element, when there is one.
+ * @returns the style after this element.
+ */
+function applyRunProperties(style: RunStyle, properties: XmlElement | undefined): RunStyle {
+  if (properties === undefined) return style
+  const stated = (local: string): boolean | undefined => {
+    const element = elements(properties, local)[0]
+    return element === undefined ? undefined : isOn(element)
+  }
+  const vertical = childValue(properties, 'vertAlign')
+  return {
+    bold: stated('b') ?? style.bold,
+    italic: stated('i') ?? style.italic,
+    code: style.code || isCodeFont(properties),
+    underline: underlineOf(properties) ?? style.underline,
+    strike: stated('strike') ?? stated('dstrike') ?? style.strike,
+    // A vertical alignment clears whichever of the two it is not.
+    sup: vertical === 'superscript'
+      ? true
+      : vertical === 'subscript' || vertical === 'baseline' ? false : style.sup,
+    sub: vertical === 'subscript'
+      ? true
+      : vertical === 'superscript' || vertical === 'baseline' ? false : style.sub,
+    color: colorOf(properties) ?? style.color,
+    highlight: highlightOf(properties) ?? style.highlight,
+    size: halfPointsToPx(childValue(properties, 'sz')) ?? style.size,
+    font: fontOf(properties) ?? style.font,
+  }
+}
+
+/**
+ * Fold one paragraph properties element into a paragraph style.
+ * @param style - the style inherited so far.
+ * @param properties - the `w:pPr` element, when there is one.
+ * @returns the style after this element.
+ */
+function applyParagraphProperties(
+  style: ParagraphStyle,
+  properties: XmlElement | undefined,
+): ParagraphStyle {
+  if (properties === undefined) return style
+  const indent = elements(properties, 'ind')[0]
+  const spacing = elements(properties, 'spacing')[0]
+  const line = Number(spacing === undefined ? '' : attribute(spacing, 'line') ?? '')
+  const rule = spacing === undefined ? undefined : attribute(spacing, 'lineRule')
+  return {
+    align: alignOf(properties) ?? style.align,
+    indent: (indent === undefined
+      ? undefined
+      : twipsToPx(attribute(indent, 'left') ?? attribute(indent, 'start'))) ?? style.indent,
+    firstLine: firstLineOf(indent) ?? style.firstLine,
+    before: (spacing === undefined ? undefined : twipsToPx(attribute(spacing, 'before'))) ?? style.before,
+    after: (spacing === undefined ? undefined : twipsToPx(attribute(spacing, 'after'))) ?? style.after,
+    // `w:line` is 240ths of a line under the `auto` rule; the other two rules are
+    // a fixed height this model has no way to state as a multiple.
+    lineHeight: Number.isFinite(line) && line > 0 && rule !== 'exact' && rule !== 'atLeast'
+      ? Math.round((line / 240) * 100) / 100
+      : style.lineHeight,
+  }
+}
+
+/**
+ * A style and everything it is based on, nearest first.
+ * @param table - the document's styles.
+ * @param styleId - the style an element names, when it names one.
+ * @returns the chain, nearest first; empty when nothing is named or defined.
+ */
+function styleChain(table: StyleTable, styleId: string | undefined): StyleDefinition[] {
+  const chain: StyleDefinition[] = []
+  const seen = new Set<string>()
+  let id = styleId
+  while (id !== undefined && !seen.has(id)) {
+    seen.add(id)
+    const style = table.byId.get(id)
+    if (style === undefined) break
+    chain.push(style)
+    id = style.basedOn
+  }
+  return chain
+}
+
+/**
+ * The run style a paragraph establishes for every run inside it.
+ *
+ * This is the whole reason the preview needs a style table: a real document's
+ * runs carry almost nothing, and the font size and weight a reader sees come from
+ * the document defaults and the paragraph style chain above them.
+ * @param table - the document's styles.
+ * @param styleId - the paragraph's effective style id.
+ * @returns the inherited run style.
+ */
+function paragraphBaseStyle(table: StyleTable, styleId: string | undefined): RunStyle {
+  let style = applyRunProperties(PLAIN, table.defaultRun)
+  for (const definition of styleChain(table, styleId).reverse()) {
+    style = applyRunProperties(style, definition.runProperties)
+  }
+  return style
+}
+
+/**
+ * The block metrics one paragraph ends up with.
+ * @param table - the document's styles.
+ * @param paragraphProperties - the paragraph's own `w:pPr`, when it has one.
+ * @param styleId - the paragraph's effective style id.
+ * @returns the resolved metrics.
+ */
+function paragraphMetrics(
+  table: StyleTable,
+  paragraphProperties: XmlElement | undefined,
+  styleId: string | undefined,
+): ParagraphStyle {
+  let style = PLAIN_PARAGRAPH
+  for (const definition of styleChain(table, styleId).reverse()) {
+    style = applyParagraphProperties(style, definition.paragraphProperties)
+  }
+  return applyParagraphProperties(style, paragraphProperties)
+}
+
+/**
+ * The metrics a block carries, or undefined when the paragraph states none.
+ * @param style - the resolved paragraph style.
+ * @returns the block's metrics.
+ */
+function toMetrics(style: ParagraphStyle): BlockMetrics | undefined {
+  const metrics: BlockMetrics = {
+    ...(style.align === undefined ? {} : { align: style.align }),
+    ...(style.indent === undefined ? {} : { indent: style.indent }),
+    ...(style.firstLine === undefined ? {} : { firstLine: style.firstLine }),
+    ...(style.before === undefined ? {} : { before: style.before }),
+    ...(style.after === undefined ? {} : { after: style.after }),
+    ...(style.lineHeight === undefined ? {} : { lineHeight: style.lineHeight }),
+  }
+  return Object.keys(metrics).length === 0 ? undefined : metrics
+}
+
+/**
  * One child element's `w:val`, which is how OOXML states most of its properties.
  * @param element - the parent, which may be absent.
  * @param local - the child's local name.
@@ -189,34 +426,35 @@ function headingLevel(level: number): number {
  * @param zip - the open package.
  * @returns the levels by style id, and the style ids that mean a quote.
  */
-async function readStyles(zip: ZipArchive): Promise<{
-  headings: Map<string, number>
-  quotes: Set<string>
-}> {
-  const headings = new Map<string, number>()
-  const quotes = new Set<string>()
+async function readStyles(zip: ZipArchive): Promise<StyleTable> {
+  const byId = new Map<string, StyleDefinition>()
+  let defaultRun: XmlElement | undefined
+  let defaultParagraph: string | undefined
   const text = await zip.text('word/styles.xml')
-  if (text === undefined) return { headings, quotes }
-  for (const style of descendants(parseXml(text), 'style')) {
-    if (attribute(style, 'type') !== 'paragraph') continue
+  if (text === undefined) return { defaultRun, defaultParagraph, byId }
+  const root = parseXml(text)
+  const defaults = firstDescendant(root, 'docDefaults')
+  if (defaults !== undefined) {
+    const runDefault = elements(defaults, 'rPrDefault')[0]
+    if (runDefault !== undefined) defaultRun = elements(runDefault, 'rPr')[0]
+  }
+  for (const style of descendants(root, 'style')) {
     const id = attribute(style, 'styleId')
     if (id === undefined) continue
-    // A style's own name is what a localized Word writes; the id is what a
-    // document written in English carries.
-    const name = childValue(style, 'name')
-    if (isQuoteName(id) || (name !== undefined && isQuoteName(name))) quotes.add(id)
-    const outline = childValue(elements(style, 'pPr')[0], 'outlineLvl')
-    if (outline !== undefined) {
-      const level = Number(outline)
-      // Nine is "body text" spelled as an outline level: not a heading.
-      if (Number.isFinite(level) && level >= 0 && level <= 8) headings.set(id, headingLevel(level + 1))
-      continue
-    }
-    const named = /^(?:heading|标题)\s*([1-9])$/i.exec(id.trim())
-    if (named !== null) headings.set(id, headingLevel(Number(named[1])))
-    else if (/^(?:title|标题)$/i.test(id.trim())) headings.set(id, 1)
+    const type = attribute(style, 'type') ?? 'paragraph'
+    // The default paragraph style is what applies where a paragraph names none,
+    // and it is where a document's body formatting usually lives.
+    if (type === 'paragraph' && attribute(style, 'default') === '1') defaultParagraph = id
+    byId.set(id, {
+      id,
+      type,
+      name: childValue(style, 'name'),
+      basedOn: childValue(style, 'basedOn'),
+      runProperties: elements(style, 'rPr')[0],
+      paragraphProperties: elements(style, 'pPr')[0],
+    })
   }
-  return { headings, quotes }
+  return { defaultRun, defaultParagraph, byId }
 }
 
 /**
@@ -226,6 +464,51 @@ async function readStyles(zip: ZipArchive): Promise<{
  */
 function isQuoteName(value: string): boolean {
   return /^(?:quote|blockquote|引用)$/i.test(value.trim())
+}
+
+/**
+ * The heading level a paragraph's style chain states.
+ *
+ * A style's outline level is authoritative; its name and then its id are the
+ * fallback, which is what catches the localized documents a Word in another
+ * language writes — a Chinese Word names its heading styles `1`, `2`, `3` and
+ * gives them the name `heading 1`.
+ * @param chain - the style chain, nearest first.
+ * @returns the level, or undefined when the chain states none.
+ */
+function headingLevelOf(chain: readonly StyleDefinition[]): number | undefined {
+  for (const definition of chain) {
+    const outline = childValue(definition.paragraphProperties, 'outlineLvl')
+    if (outline === undefined) continue
+    const level = Number(outline)
+    // Nine is "body text" spelled as an outline level: not a heading.
+    return Number.isFinite(level) && level >= 0 && level <= 8 ? headingLevel(level + 1) : undefined
+  }
+  // The style's own name is what a localized Word writes (`heading 1` under an id
+  // of `1`); the id is what a document written in English carries.
+  for (const definition of chain) {
+    for (const candidate of [definition.name, definition.id]) {
+      if (candidate === undefined) continue
+      const named = /^(?:heading|标题)\s*([1-9])$/i.exec(candidate.trim())
+      if (named !== null) return headingLevel(Number(named[1]))
+      if (/^(?:title|标题)$/i.test(candidate.trim())) return 1
+    }
+  }
+  // A numeric id with no name is still a heading level in a localized document.
+  for (const definition of chain) {
+    const numeric = /^([1-9])$/.exec(definition.id.trim())
+    if (numeric !== null) return headingLevel(Number(numeric[1]))
+  }
+  return undefined
+}
+
+/**
+ * Whether a paragraph's style chain says it is a quote.
+ * @param chain - the style chain, nearest first.
+ * @returns whether any style in it is the quote style.
+ */
+function isQuoteStyle(chain: readonly StyleDefinition[]): boolean {
+  return chain.some(definition => isQuoteName(definition.name ?? '') || isQuoteName(definition.id))
 }
 
 /**
@@ -316,6 +599,8 @@ function pushText(runs: InlineRun[], text: string, style: RunStyle): void {
     ...(style.sub ? { sub: true } : {}),
     ...(style.color === undefined ? {} : { color: style.color }),
     ...(style.highlight === undefined ? {} : { highlight: style.highlight }),
+    ...(style.size === undefined ? {} : { size: style.size }),
+    ...(style.font === undefined ? {} : { font: style.font }),
   })
 }
 
@@ -336,6 +621,8 @@ function sameStyle(run: InlineRun, style: RunStyle): boolean {
     && (run.sub === true) === style.sub
     && (run.color ?? '') === (style.color ?? '')
     && (run.highlight ?? '') === (style.highlight ?? '')
+    && (run.size ?? 0) === (style.size ?? 0)
+    && (run.font ?? '') === (style.font ?? '')
 }
 
 /**
@@ -357,22 +644,15 @@ function isCodeFont(properties: XmlElement | undefined): boolean {
  * @param inherited - the emphasis carried in from an enclosing run property.
  * @param runs - the list to append to.
  */
-function pushRun(run: XmlElement, inherited: RunStyle, runs: InlineRun[]): void {
+function pushRun(run: XmlElement, base: RunStyle, table: StyleTable, runs: InlineRun[]): void {
   const properties = elements(run, 'rPr')[0]
-  const toggle = (local: string): boolean =>
-    isOn(properties === undefined ? undefined : elements(properties, local)[0])
-  const vertical = childValue(properties, 'vertAlign')
-  const style: RunStyle = {
-    bold: inherited.bold || toggle('b'),
-    italic: inherited.italic || toggle('i'),
-    code: inherited.code || isCodeFont(properties),
-    underline: inherited.underline || underlineOn(properties),
-    strike: inherited.strike || toggle('strike') || toggle('dstrike'),
-    sup: inherited.sup || vertical === 'superscript',
-    sub: inherited.sub || vertical === 'subscript',
-    color: colorOf(properties) ?? inherited.color,
-    highlight: highlightOf(properties) ?? inherited.highlight,
+  // The run's own formatting is the last word in a cascade that starts at the
+  // document defaults and passes through the paragraph's style chain.
+  let style = base
+  for (const definition of styleChain(table, childValue(properties, 'rStyle')).reverse()) {
+    style = applyRunProperties(style, definition.runProperties)
   }
+  style = applyRunProperties(style, properties)
   let text = ''
   for (const node of run.children) {
     if (!isElement(node)) continue
@@ -393,17 +673,22 @@ function pushRun(run: XmlElement, inherited: RunStyle, runs: InlineRun[]): void 
  * @param inherited - the emphasis carried in.
  * @param runs - the list to append to.
  */
-function readRuns(container: XmlElement, inherited: RunStyle, runs: InlineRun[]): void {
+function readRuns(
+  container: XmlElement,
+  base: RunStyle,
+  table: StyleTable,
+  runs: InlineRun[],
+): void {
   for (const child of container.children) {
     if (!isElement(child)) continue
     switch (child.local) {
-      case 'r': pushRun(child, inherited, runs); break
+      case 'r': pushRun(child, base, table, runs); break
       case 'hyperlink': case 'ins': case 'smartTag': case 'dir': case 'bdo':
-        readRuns(child, inherited, runs)
+        readRuns(child, base, table, runs)
         break
       case 'sdt': {
         const content = elements(child, 'sdtContent')[0]
-        if (content !== undefined) readRuns(content, inherited, runs)
+        if (content !== undefined) readRuns(content, base, table, runs)
         break
       }
       // Anything else — `w:pPr`, `w:del` and its deleted text, bookmarks, proofing
@@ -454,18 +739,25 @@ function pushImages(
 
 /**
  * One table as a block.
- * @param table - the `w:tbl` element.
+ * @param element - the `w:tbl` element.
+ * @param styles - the document's styles, which a cell's runs inherit from.
  * @returns the block, or undefined when the table holds no cell.
  */
-function tableBlock(table: XmlElement): Block | undefined {
+function tableBlock(element: XmlElement, styles: StyleTable): Block | undefined {
   const rows: { cells: TableCell[] }[] = []
-  for (const row of elements(table, 'tr')) {
+  for (const row of elements(element, 'tr')) {
     const cells: TableCell[] = []
     for (const cell of elements(row, 'tc')) {
       const runs: InlineRun[] = []
       for (const paragraph of elements(cell, 'p')) {
         const own: InlineRun[] = []
-        readRuns(paragraph, PLAIN, own)
+        const properties = elements(paragraph, 'pPr')[0]
+        readRuns(
+          paragraph,
+          paragraphBaseStyle(styles, childValue(properties, 'pStyle') ?? styles.defaultParagraph),
+          styles,
+          own,
+        )
         if (own.length === 0) continue
         if (runs.length > 0) runs.push({ text: '\n' })
         runs.push(...own)
@@ -502,33 +794,42 @@ export async function readWord(bytes: Uint8Array): Promise<WordDocument> {
       return
     }
     const properties = elements(paragraph, 'pPr')[0]
+    // A paragraph that names no style still has one: the document's default.
+    // That is where a document's body formatting usually lives, so missing it
+    // would drop the justification and the font size of every ordinary line.
+    const style = childValue(properties, 'pStyle') ?? styles.defaultParagraph
+    const chain = styleChain(styles, style)
     const runs: InlineRun[] = []
-    readRuns(paragraph, PLAIN, runs)
+    readRuns(paragraph, paragraphBaseStyle(styles, style), styles, runs)
     const outline = childValue(properties, 'outlineLvl')
-    const styleId = childValue(properties, 'pStyle')
     const level = outline !== undefined && Number(outline) >= 0 && Number(outline) <= 8
       ? headingLevel(Number(outline) + 1)
-      : styleId === undefined
-        ? undefined
-        : styles.headings.get(styleId)
-    const align = alignOf(properties)
+      : headingLevelOf(chain)
+    const metrics = toMetrics(paragraphMetrics(styles, properties, style))
     if (runs.length > 0) {
+      const withMetrics = metrics === undefined ? {} : { metrics }
       if (level !== undefined) {
-        blocks.push({ kind: 'heading', level, runs, ...(align === undefined ? {} : { align }) })
-      } else if (styleId !== undefined && styles.quotes.has(styleId)) {
-        blocks.push({ kind: 'quote', runs, ...(align === undefined ? {} : { align }) })
+        blocks.push({ kind: 'heading', level, runs, ...withMetrics })
+      } else if (isQuoteStyle(chain)) {
+        blocks.push({ kind: 'quote', runs, ...withMetrics })
       } else {
         const numberingProperties = properties === undefined ? undefined : elements(properties, 'numPr')[0]
         const numberingId = childValue(numberingProperties, 'numId')
         if (numberingId === undefined) {
-          blocks.push({ kind: 'paragraph', runs, ...(align === undefined ? {} : { align }) })
+          blocks.push({ kind: 'paragraph', runs, ...withMetrics })
         } else {
           const depth = Number(childValue(numberingProperties, 'ilvl') ?? '0')
           const format = numbering.get(numberingId)?.get(Number.isFinite(depth) ? depth : 0)
           // A numbering definition this package does not describe is still a list
           // item; it is shown as a bullet rather than as a bare paragraph.
           const ordered = format !== undefined && format !== 'bullet' && format !== 'none'
-          blocks.push({ kind: 'list', ordered, depth: Number.isFinite(depth) ? depth : 0, runs })
+          blocks.push({
+            kind: 'list',
+            ordered,
+            depth: Number.isFinite(depth) ? depth : 0,
+            runs,
+            ...withMetrics,
+          })
         }
       }
     }
@@ -547,7 +848,7 @@ export async function readWord(bytes: Uint8Array): Promise<WordDocument> {
         continue
       }
       if (child.local === 'tbl') {
-        const table = tableBlock(child)
+        const table = tableBlock(child, styles)
         if (table !== undefined) blocks.push(table)
         continue
       }

@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import { bytesOfDataUrl } from './export/pdf.ts'
-import type { Block, BlockAlign, InlineRun } from './export/model.ts'
+import type { Block, BlockMetrics, InlineRun } from './export/model.ts'
 import type { OfficeDocument, OfficeKind, SheetTable, SlideContent } from './office/index.ts'
 import { readOfficeDocument } from './office/index.ts'
 import type { PreviewFile } from './store.ts'
@@ -60,12 +60,25 @@ export function PdfPreview({ file, name, t }: {
 }
 
 /**
- * A block's alignment, as the style it takes.
- * @param align - the block's alignment, when it states one.
- * @returns the style, or undefined to leave the block where it is.
+ * The style one block's metrics take.
+ *
+ * These are the document's own numbers — resolved through its style chain — so a
+ * paragraph the reader sees here sits where it sits in Word, rather than at
+ * whatever this sheet would otherwise give a `<p>`.
+ * @param metrics - the block's metrics, when it states any.
+ * @returns the style, or undefined to leave the block as the sheet draws it.
  */
-function alignStyle(align: BlockAlign | undefined): CSSProperties | undefined {
-  return align === undefined ? undefined : { textAlign: align }
+function metricsStyle(metrics: BlockMetrics | undefined): CSSProperties | undefined {
+  if (metrics === undefined) return undefined
+  const style: CSSProperties = {
+    ...(metrics.align === undefined ? {} : { textAlign: metrics.align }),
+    ...(metrics.indent === undefined ? {} : { marginLeft: metrics.indent }),
+    ...(metrics.firstLine === undefined ? {} : { textIndent: metrics.firstLine }),
+    ...(metrics.before === undefined ? {} : { marginTop: metrics.before }),
+    ...(metrics.after === undefined ? {} : { marginBottom: metrics.after }),
+    ...(metrics.lineHeight === undefined ? {} : { lineHeight: metrics.lineHeight }),
+  }
+  return Object.keys(style).length === 0 ? undefined : style
 }
 
 /**
@@ -87,9 +100,13 @@ function Run({ run }: { run: InlineRun }): ReactNode {
   if (run.strike === true) node = <s>{node}</s>
   if (run.sup === true) node = <sup>{node}</sup>
   else if (run.sub === true) node = <sub>{node}</sub>
-  if (run.color !== undefined || run.highlight !== undefined) {
-    node = <span style={{ color: run.color, backgroundColor: run.highlight }}>{node}</span>
+  const style: CSSProperties = {
+    ...(run.color === undefined ? {} : { color: run.color }),
+    ...(run.highlight === undefined ? {} : { backgroundColor: run.highlight }),
+    ...(run.size === undefined ? {} : { fontSize: run.size }),
+    ...(run.font === undefined ? {} : { fontFamily: run.font }),
   }
+  if (Object.keys(style).length > 0) node = <span style={style}>{node}</span>
   return <>{node}</>
 }
 
@@ -111,7 +128,7 @@ function BlockView({ block }: { block: Block }): ReactNode {
   switch (block.kind) {
     case 'heading': {
       const runs = <Runs runs={block.runs} />
-      const style = alignStyle(block.align)
+      const style = metricsStyle(block.metrics)
       switch (block.level) {
         case 1: return <h1 style={style}>{runs}</h1>
         case 2: return <h2 style={style}>{runs}</h2>
@@ -122,9 +139,9 @@ function BlockView({ block }: { block: Block }): ReactNode {
       }
     }
     case 'paragraph':
-      return <p style={alignStyle(block.align)}><Runs runs={block.runs} /></p>
+      return <p style={metricsStyle(block.metrics)}><Runs runs={block.runs} /></p>
     case 'quote':
-      return <blockquote style={alignStyle(block.align)}><Runs runs={block.runs} /></blockquote>
+      return <blockquote style={metricsStyle(block.metrics)}><Runs runs={block.runs} /></blockquote>
     case 'code':
       return <pre className="dsh-fe-doc-code">{block.text}</pre>
     case 'rule':

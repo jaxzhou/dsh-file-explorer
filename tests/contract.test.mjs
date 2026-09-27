@@ -643,11 +643,25 @@ test('a Word document is written and read back as the same blocks', async () => 
   assert.equal(read.kind, 'word')
   assert.equal(read.truncated, false)
   // The writer marks a heading with an outline level, which is what the reader
-  // finds it by — so a heading survives the trip as a heading.
-  assert.deepEqual(read.blocks[0], { kind: 'heading', level: 2, runs: [{ text: 'Chapter', bold: true }] })
+  // finds it by — so a heading survives the trip as a heading. The metrics are
+  // the writer's own spacing coming back, which is the paragraph side of the
+  // round trip working.
+  assert.deepEqual(read.blocks[0], {
+    kind: 'heading',
+    level: 2,
+    runs: [{ text: 'Chapter', bold: true }],
+    metrics: { before: 16, after: 8 },
+  })
   assert.deepEqual(read.blocks[1], {
     kind: 'paragraph',
-    runs: [{ text: 'a ' }, { text: 'b', bold: true }, { text: ' c', code: true }],
+    // A code run comes back as both: the writer says it is monospaced by naming
+    // the face, and the reader reports the face it was given.
+    runs: [
+      { text: 'a ' },
+      { text: 'b', bold: true },
+      { text: ' c', code: true, font: 'Consolas' },
+    ],
+    metrics: { after: 8 },
   })
   assert.deepEqual(read.blocks[2], blocks[2])
   // The picture comes back as the same bytes under its own media type, at the
@@ -1259,8 +1273,8 @@ test('a Word run keeps the formatting Word gave it, not only its text', async ()
     { text: 'plain' },
     { text: 'filled', highlight: '#00ff00' },
   ])
-  assert.equal(read.blocks[1].align, 'center')
-  assert.equal(read.blocks[2].align, 'justify')
+  assert.equal(read.blocks[1].metrics.align, 'center')
+  assert.equal(read.blocks[2].metrics.align, 'justify')
   assert.equal(read.blocks[3].kind, 'quote')
   assert.deepEqual(read.blocks[3].runs, [{ text: 'quoted' }])
 })
@@ -1270,10 +1284,10 @@ test('basic formatting survives a Word round trip', async () => {
   const { docxFromBlocks, readWord } = registration.factory(stubRequire())
 
   const blocks = [
-    { kind: 'heading', level: 1, align: 'center', runs: [{ text: 'Centred' }] },
+    { kind: 'heading', level: 1, metrics: { align: 'center' }, runs: [{ text: 'Centred' }] },
     {
       kind: 'paragraph',
-      align: 'right',
+      metrics: { align: 'right' },
       runs: [
         { text: 'u', underline: true },
         { text: 's', strike: true },
@@ -1288,9 +1302,9 @@ test('basic formatting survives a Word round trip', async () => {
 
   // A heading comes back bold because the writer marks one that way as well as
   // by its outline level; its alignment is its own.
-  assert.equal(read.blocks[0].align, 'center')
+  assert.equal(read.blocks[0].metrics.align, 'center')
   assert.deepEqual(read.blocks[0].runs, [{ text: 'Centred', bold: true }])
-  assert.equal(read.blocks[1].align, 'right')
+  assert.equal(read.blocks[1].metrics.align, 'right')
   assert.deepEqual(read.blocks[1].runs, [
     { text: 'u', underline: true },
     { text: 's', strike: true },
@@ -1299,6 +1313,67 @@ test('basic formatting survives a Word round trip', async () => {
     { text: 'red', color: '#ff0000' },
     { text: 'lit', highlight: '#ffff00' },
   ])
+})
+
+test('a Word paragraph takes its formatting from its style, not from itself', async () => {
+  const registration = await loadClientFactory()
+  const { readWord, zip } = registration.factory(stubRequire())
+
+  // A document shaped the way Word writes one: the runs carry nothing, and the
+  // size, the weight and the justification all live in the styles part. This is
+  // the case that used to render as plain text — a real document's body text is
+  // justified and 10.5pt because its Normal style says so, not because any run
+  // repeats it.
+  const styles = '<w:styles xmlns:w="urn:w">'
+    + '<w:docDefaults><w:rPrDefault><w:rPr>'
+    + '<w:rFonts w:ascii="Arial" w:eastAsia="宋体"/><w:sz w:val="21"/>'
+    + '</w:rPr></w:rPrDefault></w:docDefaults>'
+    + '<w:style w:type="paragraph" w:default="1" w:styleId="a"><w:name w:val="Normal"/>'
+    + '<w:pPr><w:jc w:val="both"/></w:pPr></w:style>'
+    + '<w:style w:type="paragraph" w:styleId="1"><w:name w:val="heading 1"/>'
+    + '<w:basedOn w:val="a"/>'
+    + '<w:pPr><w:spacing w:before="340" w:after="330" w:line="360" w:lineRule="auto"/>'
+    + '<w:outlineLvl w:val="0"/></w:pPr>'
+    + '<w:rPr><w:b/><w:sz w:val="44"/></w:rPr></w:style>'
+    + '<w:style w:type="character" w:styleId="Emphasis"><w:name w:val="Emphasis"/>'
+    + '<w:rPr><w:i/><w:color w:val="FF0000"/></w:rPr></w:style>'
+    + '</w:styles>'
+  const document = '<w:document xmlns:w="urn:w"><w:body>'
+    // The localized spelling: a Chinese Word names its heading styles `1`, `2`.
+    + '<w:p><w:pPr><w:pStyle w:val="1"/><w:jc w:val="center"/></w:pPr><w:r><w:t>标题</w:t></w:r></w:p>'
+    // No paragraph properties at all: everything below comes from the default.
+    + '<w:p><w:r><w:t>正文</w:t></w:r></w:p>'
+    + '<w:p><w:r><w:rPr><w:rStyle w:val="Emphasis"/></w:rPr><w:t>强调</w:t></w:r></w:p>'
+    + '</w:body></w:document>'
+
+  const read = await readWord(zip([
+    { name: 'word/document.xml', data: new TextEncoder().encode(document) },
+    { name: 'word/styles.xml', data: new TextEncoder().encode(styles) },
+  ]))
+
+  assert.deepEqual(read.blocks.map(block => block.kind), ['heading', 'paragraph', 'paragraph'])
+  // 44 half-points is 22pt is 29px; the line is 360/240 of a line; 340 twips is
+  // 23px and 330 is 22px. The paragraph's own `w:jc` beats the style's.
+  assert.deepEqual(read.blocks[0], {
+    kind: 'heading',
+    level: 1,
+    runs: [{ text: '标题', bold: true, size: 29, font: '宋体, Arial' }],
+    metrics: { align: 'center', before: 23, after: 22, lineHeight: 1.5 },
+  })
+  // A paragraph that says nothing still gets the default style's justification
+  // and the document's own size and faces.
+  assert.deepEqual(read.blocks[1], {
+    kind: 'paragraph',
+    runs: [{ text: '正文', size: 14, font: '宋体, Arial' }],
+    metrics: { align: 'justify' },
+  })
+  // A character style adds to what the paragraph established rather than
+  // replacing it.
+  assert.deepEqual(read.blocks[2], {
+    kind: 'paragraph',
+    runs: [{ text: '强调', italic: true, color: '#ff0000', size: 14, font: '宋体, Arial' }],
+    metrics: { align: 'justify' },
+  })
 })
 
 test('tab labels disambiguate only the basenames that clash', async () => {

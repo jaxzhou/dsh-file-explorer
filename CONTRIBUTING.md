@@ -177,12 +177,27 @@ is the point of how it is built:
   round-tripped — the writer types its markers into the text, so a list comes
   back as a paragraph, and the list path is covered by a hand-written fixture
   that uses `w:numPr` the way Word does.
-- **Formatting lives in the shared model, not in the reader.** `InlineRun`
-  carries underline, strikethrough, super- and subscript, colour and highlight,
-  and the heading/paragraph/quote blocks carry alignment. The reader fills them
-  from `w:u`, `w:strike`, `w:vertAlign`, `w:color`, `w:highlight`/`w:shd` and
-  `w:jc`; the writer emits them back. Adding a format on one side only breaks the
-  round trip, which is the point of it being a round trip.
+- **Formatting is *resolved*, not read off the run.** This is the trap that made
+  an early version render a real document as plain text: a Word document's runs
+  carry almost nothing — `<w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr>` is a
+  whole run — and the size, the weight and the justification live in
+  `styles.xml`, on `w:docDefaults` and on the paragraph style the paragraph names
+  (or the **default** paragraph style, where it names none, which is where a
+  document's body formatting usually is). So the reader builds a style table and
+  folds the chain: document defaults → paragraph style chain → character style
+  chain → the run's own properties. A property an element *states* wins,
+  including when it states it *off*; one it does not mention leaves the inherited
+  value alone. The heading level comes from `styles.xml` too, by `w:outlineLvl`
+  and then by style name — a Chinese Word names its heading styles `1`, `2`, `3`
+  and gives them the name `heading 1`, so matching on the id alone finds nothing.
+  Theme *fonts* are deliberately not resolved: `w:asciiTheme` needs the theme
+  part, and the page's own default beats a guess.
+- **Formatting lives in the shared model.** `InlineRun` carries underline,
+  strikethrough, super- and subscript, colour, highlight, size and font, and the
+  heading, paragraph, quote and list blocks carry `metrics` — alignment, indents,
+  spacing, line height. The writer emits them back and the reader reads them, so
+  the round trip covers formatting and not only text; adding a field on one side
+  only breaks that, which is the point of it being a round trip.
   A highlight is written as `w:shd` rather than as `w:highlight`, because the
   named highlight covers sixteen colours and a fill covers the one the document
   used; the reader takes either spelling.
@@ -249,12 +264,18 @@ dsh plugin --profile web remove <old-name>
 dsh plugin --profile web add @jaxzhou/dsh-file-explorer
 ```
 
-### npm picks the README, and prefers the last candidate
+### npm picks the README, and the pick is not stable
 
 npm always packs any root file matching `readme{,.*}` regardless of `files`, and
-the registry picked `README.zh.md` over `README.md` — so the npm page renders the
-Chinese document. Moving a translation out of the root (root-anchored pattern) is
-the only reliable fix; nothing in `package.json` controls it.
+it renders one of them as the package page. Which one is not something
+`package.json` controls, and it is not stable: from tarballs whose file lists were
+identical, the page rendered the English README at 0.1.7 and the Chinese one at
+0.1.8.
+
+So the translation does not live at the root. `docs/README.zh.md` is the only copy
+of it, and that placement is load-bearing rather than tidiness — a root-anchored
+`README.<locale>.md` re-enters the draw. The `files` list names that one path, so
+the tarball carries the translation without putting a second candidate at the root.
 
 Two more npm facts worth remembering:
 
