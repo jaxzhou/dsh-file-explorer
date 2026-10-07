@@ -100,7 +100,7 @@ export interface PreviewImage {
   /** `data:` URL carrying the file's complete bytes under its media type. */
   readonly dataUrl: string
   /** Byte size of the complete file, when the backend reports it. */
-  readonly bytes: number | undefined
+  readonly size: number | undefined
 }
 
 /**
@@ -109,12 +109,17 @@ export interface PreviewImage {
  * which the pane unpacks.
  */
 export interface PreviewFile {
-  /** The file's complete bytes, base64, as the Remote returned them. */
-  readonly data: string
+  /**
+   * The file's complete bytes.
+   *
+   * Native bytes rather than a `data:` URL or base64: harness 0.2.0 sends them
+   * that way, and a package the pane is about to unpack wants them that way.
+   */
+  readonly data: Uint8Array
   /** The media type its suffix says the bytes carry. */
   readonly mediaType: string
   /** Byte size of the complete file, when the backend reports it. */
-  readonly bytes: number | undefined
+  readonly size: number | undefined
 }
 
 /**
@@ -161,6 +166,8 @@ export interface FilesState {
   modes: Record<string, PreviewMode>
   /** Line-wrap preference by absolute path; an absent entry wraps. */
   wraps: Record<string, boolean>
+  /** Whether the tree pane is showing; a narrow pane shows one pane at a time. */
+  treeOpen: boolean
   /** Downloads this session has started, newest last. */
   downloads: DownloadTask[]
 }
@@ -197,6 +204,8 @@ type FilesActions = {
   setWrap: (draft: FilesState, path: string, wrap: boolean) => void
   /** Choose which body one tab shows. */
   setMode: (draft: FilesState, path: string, mode: PreviewMode) => void
+  /** Show or hide the tree pane. */
+  setTree: (draft: FilesState, open: boolean) => void
   /** Record one download as started. */
   downloadStarted: (draft: FilesState, task: DownloadTask) => void
   /** Record how far one download has got. */
@@ -219,6 +228,7 @@ function emptyState(): FilesState {
     retained: [],
     modes: {},
     wraps: {},
+    treeOpen: true,
     downloads: [],
   }
 }
@@ -266,11 +276,13 @@ export function createFilesStore(): EngineStoreHandle<FilesState, FilesActions> 
     init: emptyState,
     actions: {
       start: (d, root) => {
-        // Downloads outlive the tree: a session whose working directory changed
-        // mid-download has not stopped saving the file.
-        const downloads = d.downloads
+        // Downloads and the pane's own layout outlive the tree: a session whose
+        // working directory changed mid-download has not stopped saving the file,
+        // and a reader who hid the file list did not ask for it back.
+        const { downloads, treeOpen } = d
         Object.assign(d, emptyState())
         d.downloads = downloads
+        d.treeOpen = treeOpen
         d.root = root
         d.expanded = [root]
       },
@@ -339,6 +351,9 @@ export function createFilesStore(): EngineStoreHandle<FilesState, FilesActions> 
       },
       setMode: (d, path, mode) => {
         d.modes[path] = mode
+      },
+      setTree: (d, open) => {
+        d.treeOpen = open
       },
       downloadStarted: (d, task) => {
         d.downloads.push(task)

@@ -72,8 +72,14 @@ function stubRequire() {
   }
 }
 
-/** A fake client context recording every registration the plugin makes. */
-function fakeContext({ list, read, readAll, stat, readBytes }) {
+/**
+ * A fake client context recording every registration the plugin makes.
+ *
+ * `modernBytes` leaves `readAll` off the namespace entirely, which is what makes
+ * a fake shell a 0.2.0 one: the plugin keys its byte-read dialect on that method's
+ * presence, not on a version string.
+ */
+function fakeContext({ list, read, readAll, stat, readBytes, modernBytes = false }) {
   const registrations = []
   const effects = []
   const dictionaries = []
@@ -97,7 +103,7 @@ function fakeContext({ list, read, readAll, stat, readBytes }) {
       workspaceFiles: {
         list,
         read,
-        readAll: readAll ?? unconfigured('readAll'),
+        ...modernBytes ? {} : { readAll: readAll ?? unconfigured('readAll') },
         stat: stat ?? unconfigured('stat'),
         readBytes: readBytes ?? unconfigured('readBytes'),
       },
@@ -178,6 +184,14 @@ test('the stylesheet installer writes one owned style tag', async () => {
       // sheet or a deck unstyled rather than broken.
       '.dsh-fe-pdf', '.dsh-fe-doc', '.dsh-fe-doc-table', '.dsh-fe-sheet-table',
       '.dsh-fe-sheet-index', '.dsh-fe-slide',
+      // A collapsed tree is hidden at every width, and a narrow pane shows one
+      // pane at a time. Both are one selector each, and losing either leaves the
+      // toggle doing nothing.
+      ".dsh-fe-root[data-tree='closed'] .dsh-fe-tree",
+      '@media (max-width: 720px)',
+      ".dsh-fe-root[data-tree='open'] .dsh-fe-preview",
+      // The touch adjustments, without which a finger cannot close a tab.
+      '@media (pointer: coarse)',
     ]) {
       assert.ok(css.includes(hook), `stylesheet lost ${hook}`)
     }
@@ -1228,9 +1242,12 @@ test('the pane tracks several downloads at once', async () => {
   assert.ok(d.downloads.length <= MAX_DOWNLOADS)
   assert.ok(d.downloads.some(entry => entry.id === 'b' && entry.state.kind === 'running'))
 
-  // A different workspace root is not a reason to forget a download in flight.
+  // A different workspace root is not a reason to forget a download in flight,
+  // nor to bring back a file list the reader put away.
+  store.actions.setTree(d, false)
   store.actions.start(d, '/other')
   assert.ok(d.downloads.some(entry => entry.id === 'b'))
+  assert.equal(d.treeOpen, false)
   assert.equal(d.root, '/other')
 })
 
@@ -1543,13 +1560,204 @@ test('an image format reads complete bytes instead of a page of lines', async ()
   await settled()
   assert.deepEqual(calls[0].slice(0, 3), ['readAll', 'session-1', '/tmp/shot.PNG'])
   assert.deepEqual(writes[1], ['previewLoaded', '/tmp/shot.PNG', {
-    kind: 'image', image: { dataUrl: 'data:image/png;base64,QUJD', bytes: 3 },
+    kind: 'image', image: { dataUrl: 'data:image/png;base64,QUJD', size: 3 },
   }])
 
   // A text suffix on the same face still takes the paged read.
   face.read('/tmp/a.txt')
   await settled()
   assert.deepEqual(calls[1].slice(0, 3), ['read', 'session-1', '/tmp/a.txt'])
+})
+
+test('a glyph is reached under either name the shell\'s icon set gives it', async () => {
+  const registration = await loadClientFactory()
+  const icon = () => null
+
+  /**
+   * Materialize the bundle against one shell's icon set.
+   *
+   * The set is a proxy over the names this shell has, so every name the shim asks
+   * for is recorded whether or not the set holds it — which is the whole point:
+   * the pane cannot know which spelling it is talking to.
+   */
+  const against = (names) => {
+    const probes = []
+    const held = new Set(names)
+    const set = new Proxy({}, {
+      get: (_target, name) => {
+        if (typeof name !== 'string') return undefined
+        probes.push(name)
+        return held.has(name) ? icon : undefined
+      },
+      // The bundle's module interop copies the namespace's own keys, so the set
+      // has to name every glyph the shim may ask about — in both spellings.
+      ownKeys: () => candidateNames,
+      getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+    })
+    const shell = stubRequire()
+    const client = registration.factory(
+      specifier => specifier === '@deepseek-ai/dsh-client-ui-primitives' ? set : shell(specifier),
+    )
+    // Only the glyph under test: what the set is read for otherwise is the
+    // bundle's own business, not this contract's.
+    return { client, probes: probes.filter(name => name.startsWith('IconCopyOutline')) }
+  }
+
+  // Both spellings of every glyph the pane draws, so either shell's set is
+  // covered by one candidate list.
+  const bases = [
+    'IconBrowseOutline', 'IconCheckOutline', 'IconCloseOutline', 'IconCodeOutline', 'IconCopyOutline',
+    'IconDownloadOutline', 'IconFolderClose', 'IconFolderOpen', 'IconPanelLeftOutline',
+    'IconRefreshOutline', 'IconRightUpOutline', 'IconStopFill',
+  ]
+  const candidateNames = [
+    ...bases.flatMap(base => [`${base}Regular`, `${base}Medium`, `${base}16`]),
+    'CodeBlock', 'FileTypeIcon', 'JsonTree', 'MarkdownText',
+    'classifyFileType', 'fileSizeText', 'writeClipboard',
+  ]
+
+  // 0.2.0's set: the weight suffix wins.
+  const modern = against(bases.map(base => `${base}Regular`))
+  assert.equal(modern.client.shellIcon('IconCopyOutline'), icon)
+  assert.deepEqual(modern.probes, ['IconCopyOutlineRegular'])
+
+  // 0.1.5's set: the size suffix is all there is.
+  const legacy = against(bases.map(base => `${base}16`))
+  assert.equal(legacy.client.shellIcon('IconCopyOutline'), icon)
+  assert.deepEqual(
+    legacy.probes,
+    ['IconCopyOutlineRegular', 'IconCopyOutlineMedium', 'IconCopyOutline16'],
+  )
+
+  // A shell that renamed the set again answers `undefined` rather than throwing,
+  // which is what keeps a missing glyph from taking the whole pane down.
+  const unknown = against([])
+  assert.equal(unknown.client.shellIcon('IconCopyOutline'), undefined)
+  assert.ok(unknown.probes.includes('IconCopyOutline16'))
+})
+
+test('a complete read follows whichever byte-read dialect the shell speaks', async () => {
+  const registration = await loadClientFactory()
+
+  /** Read one image through a face whose shell is 0.2.0's or 0.1.5's. */
+  const readThrough = async (modernBytes) => {
+    const calls = []
+    const native = new Uint8Array([65, 66, 67])
+    const client = registration.factory(stubRequire())
+    const fake = fakeContext({
+      modernBytes,
+      list: async () => ({ ok: true, value: { entries: [], truncated: false } }),
+      read: async () => ({ ok: false, error: { code: 'workspace-file/not-text', message: 'binary' } }),
+      // Both dialects answer the same file: base64 text before 0.2.0, native bytes
+      // after it.
+      readAll: async (...args) => {
+        calls.push(['readAll', ...args])
+        return {
+          ok: true,
+          value: { absolutePath: '/tmp/shot.PNG', version: 'v1', bytes: 3, offset: 0, data: 'QUJD', eof: true },
+        }
+      },
+      readBytes: async (...args) => {
+        calls.push(['readBytes', ...args])
+        return {
+          ok: true,
+          value: { absolutePath: '/tmp/shot.PNG', version: 'v1', bytes: 3, offset: 0, data: native, eof: true },
+        }
+      },
+    })
+    client.apply(fake.ctx)
+
+    const { writes, actions } = recordingActions()
+    fake.registrations[0].options.inject('session-1', actions).read('/tmp/shot.PNG')
+    await settled()
+    return { calls, writes }
+  }
+
+  // 0.1.5: its own complete read, answered as base64.
+  const legacy = await readThrough(false)
+  assert.deepEqual(legacy.calls.map(call => call[0]), ['readAll'])
+  assert.deepEqual(legacy.writes[1], ['previewLoaded', '/tmp/shot.PNG', {
+    kind: 'image', image: { dataUrl: 'data:image/png;base64,QUJD', size: 3 },
+  }])
+
+  // 0.2.0: `readAll` is gone, so a complete read is a window read with no range at
+  // all — and its bytes are used as they arrive.
+  const modern = await readThrough(true)
+  assert.deepEqual(modern.calls.map(call => call[0]), ['readBytes'])
+  assert.deepEqual(modern.calls[0][3], {})
+  assert.deepEqual(modern.writes[1], ['previewLoaded', '/tmp/shot.PNG', {
+    kind: 'image', image: { dataUrl: 'data:image/png;base64,QUJD', size: 3 },
+  }])
+})
+
+test('a byte window follows whichever dialect the shell speaks', async () => {
+  const registration = await loadClientFactory()
+
+  /** Download one file, recording the options each window read carried. */
+  const downloadThrough = async (modernBytes) => {
+    const options = []
+    const native = new Uint8Array(8).fill(7)
+    const client = registration.factory(stubRequire())
+    // Above the size that is collected silently, so the transfer goes into the
+    // reader's save dialog and needs no `document` to stand in for a page.
+    const size = client.SILENT_DOWNLOAD_LIMIT + 1
+    const fake = fakeContext({
+      modernBytes,
+      list: async () => ({ ok: true, value: { entries: [], truncated: false } }),
+      read: async () => ({ ok: false, error: { code: 'workspace-file/not-text', message: 'binary' } }),
+      stat: async () => ({ ok: true, value: { absolutePath: '/w/a.bin', version: 'v1', bytes: size } }),
+      readBytes: async (_session, _path, received) => {
+        options.push(received)
+        return {
+          ok: true,
+          value: {
+            absolutePath: '/w/a.bin',
+            version: 'v1',
+            bytes: size,
+            offset: 0,
+            // The window's bytes in the shape this dialect sends them, and its
+            // last window whatever the declared size.
+            data: modernBytes ? native : Buffer.from(native).toString('base64'),
+            eof: true,
+          },
+        }
+      },
+    })
+    client.apply(fake.ctx)
+
+    const store = fake.registrations[0].options.store
+    const draft = store.init()
+    store.actions.start(draft, '/w')
+    const bound = Object.fromEntries(
+      Object.entries(store.actions).map(([name, action]) => [name, (...args) => action(draft, ...args)]),
+    )
+    const written = []
+    globalThis.showSaveFilePicker = async () => ({
+      createWritable: async () => ({
+        write: async (chunk) => { written.push(chunk.length) },
+        close: async () => { written.push('closed') },
+        abort: async () => { written.push('aborted') },
+      }),
+    })
+    try {
+      fake.registrations[0].options.inject('session-1', bound).download('/w/a.bin', 'a.bin')
+      for (let turn = 0; turn < 20 && draft.downloads[0]?.state.kind === 'running'; turn++) await settled()
+    } finally {
+      delete globalThis.showSaveFilePicker
+    }
+    assert.deepEqual(written, [8, 'closed'])
+    return { options, draft, window: client.READ_WINDOW_BYTES }
+  }
+
+  // 0.1.5: the window's own fields are the options.
+  const legacy = await downloadThrough(false)
+  assert.deepEqual(legacy.options, [{ offset: 0, length: legacy.window }])
+  assert.deepEqual(legacy.draft.downloads[0].state, { kind: 'done' })
+
+  // 0.2.0: the same window is nested under `range`.
+  const modern = await downloadThrough(true)
+  assert.deepEqual(modern.options, [{ range: { offset: 0, length: modern.window } }])
+  assert.deepEqual(modern.draft.downloads[0].state, { kind: 'done' })
 })
 
 test('a failed listing and a failed read report the Remote failure', async () => {

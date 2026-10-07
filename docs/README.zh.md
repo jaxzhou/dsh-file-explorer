@@ -34,6 +34,10 @@ dsh --profile web
 ## 能做什么
 
 左栏是会话的工作目录，逐层展开，目录在前；展开过的层级在切换预览标签后仍然保持。
+左栏本身也可以收起 —— 用它的开关，或者直接点开一个文件。后者也是窄屏上的行为：宽度
+低于 720 像素时，目录树与预览**轮流占满**，而不是挤在一个谁都放不下的宽度里；同时
+触摸设备会得到更大的控件、更高的表头，以及一个不再依赖 hover（触摸屏上永远不会发生）
+的标签关闭按钮。
 
 点击文件会在标签中打开它，因此可以同时打开多个文件——每个标签有自己的预览体、
 自己的换行设置。已打开的文件会被聚焦而不是重复打开；同名的标签会带上所在目录；
@@ -85,10 +89,14 @@ Markdown 源码。
 
 ## 环境要求
 
-DeepSeek Harness **0.1.5-rc.2** 的 **Web** 界面 —— `dsh web`，或由
+DeepSeek Harness **0.1.5-rc.2** 或 **0.2.0-rc.2** 的 **Web** 界面 —— `dsh web`，或由
 `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app` 组合出的 profile。headless
 或 SDK profile 没有浏览器，不会出现该标签。插件没有配置项，`cordis.yml` 无需
 任何设置。
+
+同一份产物同时适配两者：0.2.0 重命名了共享图标集，并改写了字节读取的形状，
+因此插件会先问运行中的 shell 用的是哪种拼写、哪种形状（见 `src/client/shell.ts`），
+而不是假定其中一种。
 
 ## 安装
 
@@ -97,10 +105,11 @@ dsh plugin --profile web add @jaxzhou/dsh-file-explorer
 dsh --profile web                 # bundle 成员在启动时读取
 ```
 
-自定义 profile 需要先具备 Web 组合：
+自定义 profile 需要先具备 Web 组合。`--from-default-profile` 会在创建 profile 后
+直接启动它，因此第一条命令打印出地址后先停掉：
 
 ```sh
-dsh --profile myprofile --from-default-profile web
+dsh --profile myprofile --from-default-profile web   # 先创建，随后启动服务
 dsh plugin --profile myprofile add @jaxzhou/dsh-file-explorer
 dsh --profile myprofile
 ```

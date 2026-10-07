@@ -35,6 +35,12 @@ import { createFilesStore } from './store.ts'
 import { installStyles } from './styles.ts'
 
 export { parseJsonDocument, previewLines, tabLabels } from './FilesView.tsx'
+// The version shim asks the shell for a glyph by a base name and answers with
+// whatever that shell's icon set spells it as, so it is reachable from outside
+// the plugin: the tests hand it each version's icon set and check what it makes
+// of one, which no version of the running shell can do.
+export { shellIcon } from './shell.ts'
+export type { WorkspaceFilesRemote } from './shell.ts'
 export {
   canExportPdf, extensionOf, hasSourceToggle, officeKindOf, previewFormatFor, readsAllBytes,
 } from './format.ts'
@@ -87,7 +93,7 @@ export type {
   DirLevel, DownloadOutcome, DownloadState, DownloadTask, FilesState, LevelState, PreviewContent,
   PreviewFile, PreviewImage, PreviewMode, PreviewState, PreviewText,
 } from './store.ts'
-export type { FilesInjected, WorkspaceFilesRemote } from './face.ts'
+export type { FilesInjected } from './face.ts'
 export type { FilesViewProps } from './FilesView.tsx'
 
 /** This plugin's identity inside the browser plugin tree. */

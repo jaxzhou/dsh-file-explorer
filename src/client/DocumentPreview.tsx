@@ -15,7 +15,6 @@
  */
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import { bytesOfDataUrl } from './export/pdf.ts'
 import type { Block, BlockMetrics, InlineRun } from './export/model.ts'
 import type { OfficeDocument, OfficeKind, SheetTable, SlideContent } from './office/index.ts'
 import { readOfficeDocument } from './office/index.ts'
@@ -34,12 +33,12 @@ export function PdfPreview({ file, name, t }: {
   name: string
   t: Copy
 }): ReactNode {
-  const url = useMemo(() => {
-    const bytes = bytesOfDataUrl(`data:${file.mediaType};base64,${file.data}`)
-    return bytes === undefined
-      ? undefined
-      : URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
-  }, [file.data, file.mediaType])
+  // The bytes the shell sent, handed to the browser's own reader as a local
+  // blob: no `data:` URL to build and nothing to decode.
+  const url = useMemo(
+    () => URL.createObjectURL(new Blob([file.data], { type: 'application/pdf' })),
+    [file.data],
+  )
   useEffect(() => () => { if (url !== undefined) URL.revokeObjectURL(url) }, [url])
   if (url === undefined) {
     return (
@@ -299,16 +298,11 @@ export function OfficePreview({ kind, file, t }: {
   useEffect(() => {
     let live = true
     setState({ kind: 'reading' })
-    const bytes = bytesOfDataUrl(`data:${file.mediaType};base64,${file.data}`)
-    if (bytes === undefined) {
-      setState({ kind: 'failed', message: t('office.undecodable') })
-      return () => { live = false }
-    }
     // Unpacking is decompression work over the whole file. It starts on a later
     // task so the pane draws its reading state first, rather than freezing on the
     // render that asked for it.
     void Promise.resolve()
-      .then(() => readOfficeDocument(kind, bytes))
+      .then(() => readOfficeDocument(kind, file.data))
       .then(
         (document) => { if (live) setState({ kind: 'ready', document }) },
         (error: unknown) => {

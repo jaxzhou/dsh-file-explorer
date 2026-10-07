@@ -56,6 +56,47 @@ const CSS = `
   min-width: 0;
 }
 
+/* A collapsed tree is gone at any width, and the preview takes its room. This is
+   the whole of what the toggle does; the narrow layout below only decides what
+   happens while the tree is *open*. */
+.dsh-fe-root[data-tree='closed'] .dsh-fe-tree {
+  display: none;
+}
+
+/* Below this width the two panes do not fit side by side, so they take turns:
+   an open tree is the pane, and closing it is what shows the preview. The
+   gesture that opens a file closes the tree as well, so a tap on a name lands on
+   the file it named.
+
+   Keep this breakpoint in step with NARROW_PANE in FilesView.tsx, which is
+   what decides whether opening a file also closes the tree. */
+@media (max-width: 720px) {
+  .dsh-fe-tree {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    resize: none;
+    border-right: 0;
+  }
+
+  .dsh-fe-root[data-tree='open'] .dsh-fe-preview {
+    display: none;
+  }
+
+  /* What is open matters more than how big it is: the pane's own facts give
+     their room to the tab strip and its controls rather than being truncated
+     along with them. */
+  .dsh-fe-meta,
+  .dsh-fe-lang {
+    display: none;
+  }
+
+  .dsh-fe-tabs {
+    min-width: 0;
+  }
+}
+
 .dsh-fe-head {
   display: flex;
   flex: 0 0 auto;
@@ -739,6 +780,70 @@ const CSS = `
   max-width: 160px;
   max-height: 120px;
   border-radius: 4px;
+}
+
+/* ── touch ────────────────────────────────────────────────────────────── */
+
+/* A control a finger has to hit is bigger than one a pointer has to, and it
+   cannot rely on hover to reveal itself: the tab close button is invisible until
+   a pointer rests on its tab, which on a touch screen is never — so a tab could
+   not be closed at all. A coarse pointer is the honest signal for this, rather
+   than a width, because a wide tablet has the same problem. */
+@media (pointer: coarse) {
+  .dsh-fe-tool {
+    min-width: 34px;
+    height: 34px;
+    padding: 0 8px;
+    font-size: 12px;
+    border-radius: 17px;
+  }
+
+  .dsh-fe-tool svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .dsh-fe-head {
+    height: 44px;
+  }
+
+  .dsh-fe-row {
+    padding: 8px 10px;
+  }
+
+  .dsh-fe-tab-label {
+    padding: 8px 5px 8px 10px;
+  }
+
+  .dsh-fe-tab-close {
+    width: 24px;
+    height: 24px;
+    margin-right: 6px;
+    opacity: 1;
+  }
+
+  .dsh-fe-tab {
+    max-width: 160px;
+  }
+
+  .dsh-fe-sheet-tab {
+    padding: 6px 12px;
+  }
+
+  .dsh-fe-download {
+    gap: 10px;
+    padding: 2px 0;
+  }
+
+  .dsh-fe-download-control {
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+  }
+
+  .dsh-fe-slide-image {
+    max-width: 45%;
+  }
 }
 `
 

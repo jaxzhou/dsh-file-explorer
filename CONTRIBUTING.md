@@ -337,7 +337,21 @@ mirror still publishes to npm.
 Then verify from the registry rather than from the checkout:
 
 ```sh
-dsh plugin --profile scratch --from-default-profile web
+dsh --profile scratch --from-default-profile web --dump-config   # create the profile
 dsh plugin --profile scratch add @jaxzhou/dsh-file-explorer@<version>
 dsh --profile scratch --dump-config | grep -A 2 jaxzhou-file-explorer
+dsh --profile scratch --port 58123 --no-open                     # then open the Files tab
 ```
+
+`--from-default-profile` belongs to `dsh` itself. Anything after
+`dsh plugin --profile scratch` is forwarded to `pnpm` verbatim, so
+`dsh plugin --profile scratch --from-default-profile web` is a pnpm argument
+error — and it still leaves a half-made profile directory behind, which is why the
+boot after it composes almost nothing. Both supported versions behave this way.
+
+**Verify on both supported harness versions.** 0.1.5-rc.2 and 0.2.0-rc.2 differ in
+two places the plugin has to ask about at runtime — the shared icon set's naming
+and the shape of a byte read — so a change that works on one can still break the
+other. The boot above is the same on both; open the Files tab on a session that has
+at least one turn, because 0.2.0 draws no view strip for an empty session.
+

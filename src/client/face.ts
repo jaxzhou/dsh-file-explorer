@@ -16,15 +16,16 @@
  * after that.
  */
 import type { BoundActions } from '@deepseek-ai/dsh-client-store'
-import type { ClientRemote } from '@deepseek-ai/dsh-api-remotes/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { bytesOfBase64, openSink, receiveFile } from './download.ts'
+import { openSink, receiveFile } from './download.ts'
 import { previewFormatFor, readsAllBytes } from './format.ts'
 import { MAX_ASSET_BYTES } from './markdown-assets.ts'
+import { dataUrlOf } from './office/binary.ts'
+import { bytesOfRead, readFileWindow, readWholeFile } from './shell.ts'
+import type { WorkspaceFilesRemote } from './shell.ts'
 import type { DownloadOutcome, PreviewText, createFilesStore } from './store.ts'
 
-/** The slice of the Client Remote face this plugin calls. */
-export type WorkspaceFilesRemote = Pick<ClientRemote, 'workspaceFiles'>
+export type { WorkspaceFilesRemote } from './shell.ts'
 
 /**
  * Largest number of leading lines one text preview asks for. The host's own
@@ -147,14 +148,15 @@ export function filesFace(
       // page of lines, because the source view can show a bounded prefix of any
       // text file.
       if (format.kind === 'image') {
-        void remote.workspaceFiles.readAll(sessionId, path, signal).then((result) => {
+        void readWholeFile(remote, sessionId, path, signal).then((result) => {
           settle(() => {
             if (result.ok) {
+              const { bytes, data } = result.value
               actions.previewLoaded(path, {
                 kind: 'image',
                 image: {
-                  dataUrl: `data:${format.mediaType};base64,${result.value.data}`,
-                  bytes: result.value.bytes,
+                  dataUrl: dataUrlOf(bytesOfRead(data), format.mediaType ?? 'application/octet-stream'),
+                  size: bytes,
                 },
               })
             } else {
@@ -168,15 +170,15 @@ export function filesFace(
       // is the whole file — bounded by the deployment's complete-read cap, whose
       // refusal reaches the pane as any other read failure does.
       if (readsAllBytes(format)) {
-        void remote.workspaceFiles.readAll(sessionId, path, signal).then((result) => {
+        void readWholeFile(remote, sessionId, path, signal).then((result) => {
           settle(() => {
             if (result.ok) {
               actions.previewLoaded(path, {
                 kind: 'file',
                 file: {
-                  data: result.value.data,
+                  data: bytesOfRead(result.value.data),
                   mediaType: format.mediaType ?? 'application/octet-stream',
-                  bytes: result.value.bytes,
+                  size: result.value.bytes,
                 },
               })
             } else {
@@ -209,23 +211,20 @@ export function filesFace(
       if (signal.aborted || request.aborted) return Promise.resolve(undefined)
       const format = previewFormatFor(path)
       if (format.kind !== 'image') return Promise.resolve(undefined)
-      return remote.workspaceFiles.readAll(sessionId, path, request).then((result) => {
+      return readWholeFile(remote, sessionId, path, request).then((result) => {
         if (!result.ok || request.aborted) return undefined
         const { bytes, data } = result.value
         if (bytes !== undefined && bytes > MAX_ASSET_BYTES) return undefined
-        return `data:${format.mediaType};base64,${data}`
+        return dataUrlOf(bytesOfRead(data), format.mediaType ?? 'application/octet-stream')
       })
     },
     readText(path, request) {
       if (signal.aborted || request.aborted) return Promise.resolve(undefined)
-      return remote.workspaceFiles.readAll(sessionId, path, request).then((result) => {
+      return readWholeFile(remote, sessionId, path, request).then((result) => {
         if (!result.ok || request.aborted) return undefined
         const { bytes, data } = result.value
         if (bytes !== undefined && bytes > MAX_ASSET_BYTES) return undefined
-        const binary = atob(data)
-        const raw = new Uint8Array(binary.length)
-        for (let index = 0; index < binary.length; index++) raw[index] = binary.charCodeAt(index)
-        return new TextDecoder().decode(raw)
+        return new TextDecoder().decode(bytesOfRead(data))
       })
     },
     download(path, name) {
@@ -261,11 +260,11 @@ export function filesFace(
           sink: choice.sink,
           signal: controller.signal,
           readWindow: async (offset, length) => {
-            const window = await remote.workspaceFiles.readBytes(
-              sessionId, path, { offset, length }, controller.signal,
+            const window = await readFileWindow(
+              remote, sessionId, path, offset, length, controller.signal,
             )
             return window.ok
-              ? { ok: true, data: bytesOfBase64(window.value.data), eof: window.value.eof }
+              ? { ok: true, data: bytesOfRead(window.value.data), eof: window.value.eof }
               : { ok: false, failure: window.error }
           },
           onProgress: (loaded, total) => { actions.downloadProgress(id, loaded, total) },

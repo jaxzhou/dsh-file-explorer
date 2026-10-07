@@ -26,17 +26,17 @@
  */
 import {
   useEffect, useMemo, useRef, useState,
-  type MutableRefObject, type ReactNode,
+  type ComponentType, type MutableRefObject, type ReactNode,
 } from 'react'
 import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { InjectFace, PropsLocale, PropsStore, TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RemoteFailure } from '@deepseek-ai/dsh-api-remotes/client'
 import {
-  CodeBlock, FileTypeIcon, IconBrowseOutline16, IconCheckOutline16, IconCloseOutline16,
-  IconCodeOutline16, IconCopyOutline16, IconDownloadOutline16, IconFolderClose16,
-  IconFolderOpen16, IconRefreshOutline16, IconRightUpOutline16, IconStopFill16,
-  JsonTree, MarkdownText, Menu, classifyFileType, fileSizeText, writeClipboard,
+  CodeBlock, FileTypeIcon, JsonTree, MarkdownText, Menu, classifyFileType, fileSizeText,
+  writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { IconProps } from '@deepseek-ai/dsh-client-ui-primitives'
+import { shellIcon } from './shell.ts'
 import type { JsonTreeLabels, MarkdownLabels } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WorkspaceDirectoryEntry } from '@deepseek-ai/dsh-api-workspace-files/types'
 import { canExportPdf, hasSourceToggle, officeKindOf, previewFormatFor } from './format.ts'
@@ -65,6 +65,48 @@ export type FilesViewProps =
 
 /** Natural, case-insensitive name order, so `file2` precedes `file10`. */
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+
+/**
+ * The pane's glyphs, by the base name the shell's icon set spells either way.
+ *
+ * Harness 0.2.0 renamed every glyph from a size suffix to a weight suffix, and a
+ * plugin is loaded into whichever shell the reader runs — so each entry names the
+ * glyph once and {@link shellIcon} resolves it under either spelling. A glyph the
+ * running shell does not have comes back undefined, which is what {@link Glyph}
+ * is for: nothing is drawn, and the pane still works.
+ */
+const ICON = {
+  browse: shellIcon('IconBrowseOutline'),
+  check: shellIcon('IconCheckOutline'),
+  close: shellIcon('IconCloseOutline'),
+  code: shellIcon('IconCodeOutline'),
+  copy: shellIcon('IconCopyOutline'),
+  download: shellIcon('IconDownloadOutline'),
+  folderClosed: shellIcon('IconFolderClose'),
+  folderOpen: shellIcon('IconFolderOpen'),
+  panelLeft: shellIcon('IconPanelLeftOutline', 'IconPanelLeft'),
+  refresh: shellIcon('IconRefreshOutline'),
+  wrap: shellIcon('IconRightUpOutline'),
+  stop: shellIcon('IconStopFill'),
+}
+
+/**
+ * One glyph, or nothing at all when this shell has neither of its names.
+ *
+ * Rendering an undefined component is not a missing icon: React throws on it and
+ * takes the whole pane down with it, which is what a renamed glyph used to do.
+ * @param props - the glyph, and the size to draw it at.
+ * @returns the glyph.
+ */
+function Glyph({ of, size, className }: {
+  of: ComponentType<IconProps> | undefined
+  size?: number
+  className?: string
+}): ReactNode {
+  if (of === undefined) return null
+  const Icon = of
+  return <Icon size={size} className={className} />
+}
 
 /**
  * Order one level's entries for display: directories first, then everything
@@ -264,8 +306,8 @@ function Entry({
           onClick={() => { tree.onToggle(path) }}
         >
           {expanded
-            ? <IconFolderOpen16 className="dsh-fe-icon" />
-            : <IconFolderClose16 className="dsh-fe-icon" />}
+            ? <Glyph of={ICON.folderOpen} className="dsh-fe-icon" />
+            : <Glyph of={ICON.folderClosed} className="dsh-fe-icon" />}
           <span className="dsh-fe-name">{entry.name}</span>
         </button>
         {expanded && <ul className="dsh-fe-level"><Level path={path} tree={tree} /></ul>}
@@ -664,7 +706,7 @@ function previewMeta(content: PreviewContent, t: TranslateNS<'fileExplorer'>): s
       content.page.bytes === undefined ? null : fileSizeText(content.page.bytes),
     ].filter(part => part !== null).join(' · ')
   }
-  const bytes = content.kind === 'image' ? content.image.bytes : content.file.bytes
+  const bytes = content.kind === 'image' ? content.image.size : content.file.size
   return bytes === undefined ? null : fileSizeText(bytes)
 }
 
@@ -802,6 +844,27 @@ function PreviewBody({
 }
 
 /**
+ * The width below which the tree and the preview take turns rather than sitting
+ * side by side.
+ *
+ * It is the same number the stylesheet's own breakpoint uses; the two are one
+ * decision written twice, so they have to change together.
+ */
+const NARROW_PANE = '(max-width: 720px)'
+
+/**
+ * Whether the pane is too narrow for both panes at once.
+ *
+ * Read at the moment of a gesture rather than watched: nothing here re-renders
+ * on a resize, and the only thing the answer decides is whether opening a file
+ * is also the gesture that shows it.
+ * @returns whether one pane is showing at a time.
+ */
+function isNarrowPane(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia(NARROW_PANE).matches
+}
+
+/**
  * The Files view: the workspace tree, the open preview tabs, and the active tab.
  * @param props - the Conversation View seat, store, injected face, and copy.
  * @returns the two-pane explorer.
@@ -836,6 +899,7 @@ export function FilesView({
   }, [actions, cwd, list, state.root])
 
   const active = state.active
+  const treeOpen = state.treeOpen
   const format: PreviewFormat | null = active === null ? null : previewFormatFor(active)
   const content = active !== null && state.previews[active]?.kind === 'ready'
     ? (state.previews[active] as { content: PreviewContent }).content
@@ -888,7 +952,13 @@ export function FilesView({
       actions.toggled(path)
       if (!loaded) list(path)
     },
-    onOpen: (path) => { actions.openFile(path) },
+    // Opening a file on a pane that shows one pane at a time is also the gesture
+    // that shows it — otherwise the reader taps a file and nothing appears to
+    // happen.
+    onOpen: (path) => {
+      actions.openFile(path)
+      if (isNarrowPane()) actions.setTree(false)
+    },
     t,
   }
   // Reload drops every level and asks again for the expanded ones; a collapsed
@@ -984,6 +1054,7 @@ export function FilesView({
       className="dsh-fe-root"
       data-files-state="tree"
       data-files-root={state.root}
+      data-tree={treeOpen ? 'open' : 'closed'}
       data-conversation-composer-overlay=""
     >
       <div className="dsh-fe-panes">
@@ -1003,7 +1074,18 @@ export function FilesView({
               data-files-reload
               onClick={reloadTree}
             >
-              <IconRefreshOutline16 />
+              <Glyph of={ICON.refresh} />
+            </button>
+            <button
+              type="button"
+              className="dsh-fe-tool"
+              aria-label={t('tree.collapse')}
+              title={t('tree.collapse')}
+              data-files-tree-toggle
+              data-tree-action="collapse"
+              onClick={() => { actions.setTree(false) }}
+            >
+              <Glyph of={ICON.panelLeft} />
             </button>
           </div>
           <div className="dsh-fe-scroll">
@@ -1012,6 +1094,22 @@ export function FilesView({
         </div>
         <div className="dsh-fe-preview" data-files-pane="preview">
           <div className="dsh-fe-head dsh-fe-tabhead">
+            {/* The tree's own toggle lives in the header of whichever pane is on
+                the left, so the control that brings the file list back is always
+                the one at the edge it would come from. */}
+            {!treeOpen && (
+              <button
+                type="button"
+                className="dsh-fe-tool"
+                aria-label={t('tree.expand')}
+                title={t('tree.expand')}
+                data-files-tree-toggle
+                data-tree-action="expand"
+                onClick={() => { actions.setTree(true) }}
+              >
+                <Glyph of={ICON.panelLeft} />
+              </button>
+            )}
             {state.open.length === 0
               ? <span className="dsh-fe-path dsh-fe-path-muted">{t('preview.title')}</span>
               : (
@@ -1045,7 +1143,7 @@ export function FilesView({
                           data-preview-tab-close={path}
                           onClick={() => { closeTab(path) }}
                         >
-                          <IconCloseOutline16 size={12} />
+                          <Glyph of={ICON.close} size={12} />
                         </button>
                       </span>
                     )
@@ -1068,7 +1166,7 @@ export function FilesView({
                 data-preview-copy-state={copied === active ? 'copied' : 'idle'}
                 onClick={copyActive}
               >
-                {copied === active ? <IconCheckOutline16 /> : <IconCopyOutline16 />}
+                {copied === active ? <Glyph of={ICON.check} /> : <Glyph of={ICON.copy} />}
               </button>
             )}
             {active !== null && (
@@ -1086,7 +1184,7 @@ export function FilesView({
                     data-preview-export
                     onClick={() => { setExportOpen(open => !open) }}
                   >
-                    <IconDownloadOutline16 />
+                    <Glyph of={ICON.download} />
                   </button>
                 )}
                 items={[
@@ -1126,7 +1224,7 @@ export function FilesView({
                 onClick={() => { actions.setMode(active, body === 'source' ? 'rendered' : 'source') }}
               >
                 {/* The icon names what pressing it shows, which is the other body. */}
-                {body === 'source' ? <IconBrowseOutline16 /> : <IconCodeOutline16 />}
+                {body === 'source' ? <Glyph of={ICON.browse} /> : <Glyph of={ICON.code} />}
               </button>
             )}
             {active !== null && body === 'source' && (
@@ -1140,7 +1238,7 @@ export function FilesView({
                 data-preview-wrap={wrap ? 'on' : 'off'}
                 onClick={() => { actions.setWrap(active, !wrap) }}
               >
-                <IconRightUpOutline16 />
+                <Glyph of={ICON.wrap} />
               </button>
             )}
             {active !== null && (
@@ -1152,7 +1250,7 @@ export function FilesView({
                 data-preview-reload
                 onClick={reloadPreview}
               >
-                <IconRefreshOutline16 />
+                <Glyph of={ICON.refresh} />
               </button>
             )}
           </div>
@@ -1182,7 +1280,7 @@ export function FilesView({
                   >
                     {/* Stopping a transfer and clearing its row are different
                         acts, so they are different glyphs. */}
-                    {task.state.kind === 'running' ? <IconStopFill16 /> : <IconCloseOutline16 />}
+                    {task.state.kind === 'running' ? <Glyph of={ICON.stop} /> : <Glyph of={ICON.close} />}
                   </button>
                 </div>
               ))}
@@ -1208,7 +1306,7 @@ export function FilesView({
                 data-preview-reload-failed
                 onClick={reloadPreview}
               >
-                <IconRefreshOutline16 />
+                <Glyph of={ICON.refresh} />
               </button>
             </div>
           )}

@@ -38,7 +38,11 @@ which no export does now.
 
 The left pane is the session's working directory, listed one level at a time,
 directories first. An expanded level stays expanded while you move between
-preview tabs.
+preview tabs, and the pane itself folds away — by its own control, or by opening
+a file. That last one is also how the pane behaves on a phone: below 720 pixels
+the tree and the preview take turns instead of sharing a width neither of them
+fits in, and a finger gets bigger controls, a taller header, and a tab close
+button that is not waiting for a hover it will never see.
 
 Clicking a file opens it in a tab, so several files stay open at once — each with
 its own body and its own wrap setting. A file that is already open is focused
@@ -98,10 +102,14 @@ beside it, and the images and stylesheets an HTML file links to.
 
 ## Requirements
 
-DeepSeek Harness **0.1.5-rc.2** on the **Web** surface — `dsh web`, or a profile
-composed from `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`. A headless or
-SDK profile has no browser and gets no tab. The plugin declares no configuration,
-so nothing in `cordis.yml` needs setting.
+DeepSeek Harness **0.1.5-rc.2** or **0.2.0-rc.2** on the **Web** surface — `dsh web`,
+or a profile composed from `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`. A
+headless or SDK profile has no browser and gets no tab. The plugin declares no
+configuration, so nothing in `cordis.yml` needs setting.
+
+One artifact serves both: 0.2.0 renamed the shared icon set and reshaped the byte
+read, so the plugin asks the running shell which spelling and which shape it has
+(see `src/client/shell.ts`) rather than assuming either.
 
 ## Install
 
@@ -110,10 +118,11 @@ dsh plugin --profile web add @jaxzhou/dsh-file-explorer
 dsh --profile web                 # bundle membership is read at startup
 ```
 
-A custom profile needs the Web composition first:
+A custom profile needs the Web composition first. `--from-default-profile` creates
+the profile *and* boots it, so stop the first command once it prints its URL:
 
 ```sh
-dsh --profile myprofile --from-default-profile web
+dsh --profile myprofile --from-default-profile web   # creates it, then serves it
 dsh plugin --profile myprofile add @jaxzhou/dsh-file-explorer
 dsh --profile myprofile
 ```
