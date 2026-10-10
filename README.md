@@ -47,7 +47,8 @@ button that is not waiting for a hover it will never see.
 Clicking a file opens it in a tab, so several files stay open at once — each with
 its own body and its own wrap setting. A file that is already open is focused
 rather than reopened, tabs whose names collide show their directory, and the tab's
-× or a middle click closes one.
+× or a middle click closes one. Right-click a tab for the rest of the strip:
+**Close**, **Close others**, and **Close all**, opening where the pointer was.
 
 The right pane picks each tab's body from the file:
 

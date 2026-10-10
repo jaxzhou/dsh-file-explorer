@@ -1466,6 +1466,49 @@ test('the store opens one tab per file, focuses and closes like an editor', asyn
   assert.equal(d.previews['/w/c.ts'], undefined)
 })
 
+test('the store closes a whole strip from one tab, keeping or dropping it', async () => {
+  const registration = await loadClientFactory()
+  const client = registration.factory(stubRequire())
+  const fake = fakeContext({ list: async () => ({ ok: true, value: {} }), read: async () => ({ ok: true, value: {} }) })
+  client.apply(fake.ctx)
+  const store = fake.registrations[0].options.store
+  const d = store.init()
+  store.actions.start(d, '/w')
+  for (const path of ['/w/a.ts', '/w/b.ts', '/w/c.ts']) {
+    store.actions.openFile(d, path)
+    store.actions.previewLoaded(d, path, { kind: 'text', page: { text: 'x', lines: 1, eof: true, bytes: 1 } })
+  }
+  store.actions.setMode(d, '/w/b.ts', 'source')
+
+  // Closing the others keeps the one the menu was opened on — even from the
+  // background — and shows it, along with its own content and preferences.
+  store.actions.activate(d, '/w/a.ts')
+  store.actions.closeOthers(d, '/w/b.ts')
+  assert.deepEqual(d.open, ['/w/b.ts'])
+  assert.equal(d.active, '/w/b.ts')
+  assert.equal(d.modes['/w/b.ts'], 'source')
+  assert.equal(d.previews['/w/b.ts'].kind, 'ready')
+  // Everything the closed tabs owned went with them.
+  assert.deepEqual(Object.keys(d.previews), ['/w/b.ts'])
+  assert.deepEqual(Object.keys(d.modes), ['/w/b.ts'])
+  assert.deepEqual(d.retained.filter(path => path !== '/w/b.ts'), [])
+
+  // A path that is not open is not a reason to close the strip it is missing
+  // from, and a lone tab has nothing else to close.
+  store.actions.closeOthers(d, '/w/absent.ts')
+  assert.deepEqual(d.open, ['/w/b.ts'])
+  store.actions.closeOthers(d, '/w/b.ts')
+  assert.deepEqual(d.open, ['/w/b.ts'])
+
+  // Closing all of them leaves nothing open and nothing shown.
+  store.actions.openFile(d, '/w/a.ts')
+  store.actions.closeAll(d)
+  assert.deepEqual(d.open, [])
+  assert.equal(d.active, null)
+  assert.deepEqual(d.previews, {})
+  assert.deepEqual(d.modes, {})
+})
+
 test('the store retains the active tab plus a bounded working set', async () => {
   const registration = await loadClientFactory()
   const client = registration.factory(stubRequire())

@@ -865,6 +865,26 @@ function isNarrowPane(): boolean {
 }
 
 /**
+ * Where a tab's context menu should open.
+ *
+ * A pointer reports where it was; a keyboard asking for the context menu
+ * (Shift+F10, the menu key) reports nothing at all, so the tab's own lower-left
+ * corner stands in for it and the menu opens where the reader is looking.
+ * @param event - the `contextmenu` event.
+ * @returns the viewport point to anchor the menu at.
+ */
+function menuPointOf(event: { clientX: number; clientY: number; currentTarget: Element }): {
+  x: number
+  y: number
+} {
+  if (event.clientX !== 0 || event.clientY !== 0) {
+    return { x: event.clientX, y: event.clientY }
+  }
+  const box = event.currentTarget.getBoundingClientRect()
+  return { x: box.left, y: box.bottom }
+}
+
+/**
  * The Files view: the workspace tree, the open preview tabs, and the active tab.
  * @param props - the Conversation View seat, store, injected face, and copy.
  * @returns the two-pane explorer.
@@ -887,6 +907,14 @@ export function FilesView({
   const [exporting, setExporting] = useState(false)
   /** Why the last export could not be written. */
   const [exportError, setExportError] = useState<string | null>(null)
+  /**
+   * The tab the reader right-clicked, and where the pointer was, which is where
+   * its menu opens. One menu serves the whole strip: a menu is about the tab it
+   * was asked from, and two of them cannot be open at once anyway.
+   */
+  const [tabMenu, setTabMenu] = useState<{ path: string; x: number; y: number } | null>(null)
+  /** The tab the open menu was asked from, so the keyboard can go back to it. */
+  const tabMenuTrigger = useRef<HTMLElement | null>(null)
 
   useEffect(() => () => {
     if (copyTimer.current !== null) clearTimeout(copyTimer.current)
@@ -1030,7 +1058,22 @@ export function FilesView({
       .finally(() => { setExporting(false) })
   }
   const closeTab = (path: string): void => {
+    // A tab's own menu has nothing left to act on once the tab is gone.
+    setTabMenu(menu => (menu?.path === path ? null : menu))
     actions.closeFile(path)
+  }
+  /**
+   * Dismiss the tab context menu.
+   *
+   * The rows unmount with it, which would leave the keyboard on the page body;
+   * the tab the menu was asked from is where the reader was working, so it takes
+   * the keyboard back — unless the menu is what closed it.
+   */
+  const releaseTabMenu = (): void => {
+    const trigger = tabMenuTrigger.current
+    tabMenuTrigger.current = null
+    setTabMenu(null)
+    if (trigger !== null && document.contains(trigger)) trigger.focus()
   }
   const root = pathParts(state.root)
   const labels = tabLabels(state.open)
@@ -1117,7 +1160,20 @@ export function FilesView({
                   {state.open.map(path => {
                     const isActive = path === active
                     return (
-                      <span className="dsh-fe-tab" key={path} role="presentation" data-preview-tab={path} data-active={isActive || undefined}>
+                      <span
+                        className="dsh-fe-tab"
+                        key={path}
+                        role="presentation"
+                        data-preview-tab={path}
+                        data-active={isActive || undefined}
+                        onContextMenu={(event) => {
+                          // The strip's own menu, not the browser's: this is the one
+                          // place a reader can close every tab at once.
+                          event.preventDefault()
+                          tabMenuTrigger.current = event.currentTarget.querySelector('button')
+                          setTabMenu({ path, ...menuPointOf(event) })
+                        }}
+                      >
                         <button
                           type="button"
                           role="tab"
@@ -1150,6 +1206,43 @@ export function FilesView({
                   })}
                 </div>
               )}
+            {tabMenu !== null && (
+              <Menu
+                open
+                // Portalled for the same reason the export menu is: the strip
+                // clips its own overflow, and a context menu must be able to hang
+                // past the edge it was asked from.
+                portal
+                align="start"
+                side="bottom"
+                autoFocus
+                className="dsh-fe-tabmenu"
+                // The pointer is the anchor: an empty trigger is rendered because a
+                // menu needs one, and its rect is answered from the gesture instead.
+                anchor={<span />}
+                getAnchorRect={() => new DOMRect(tabMenu.x, tabMenu.y, 0, 0)}
+                items={[
+                  { id: 'close', label: t('preview.closeTab') },
+                  {
+                    id: 'close-others',
+                    label: t('preview.closeOthers'),
+                    // With one tab open there is nothing else to close, and a row
+                    // that would do nothing is better shown as unavailable.
+                    disabled: state.open.length < 2,
+                  },
+                  { type: 'separator', id: 'close-separator' },
+                  { id: 'close-all', label: t('preview.closeAll') },
+                ]}
+                onSelect={(id) => {
+                  const path = tabMenu.path
+                  releaseTabMenu()
+                  if (id === 'close') closeTab(path)
+                  else if (id === 'close-others') actions.closeOthers(path)
+                  else actions.closeAll()
+                }}
+                onClose={releaseTabMenu}
+              />
+            )}
             {active !== null && body === 'source' && format?.lang !== undefined && (
               <span className="dsh-fe-lang" data-preview-lang-badge>{format.lang}</span>
             )}

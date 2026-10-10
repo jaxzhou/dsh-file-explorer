@@ -192,6 +192,10 @@ type FilesActions = {
   activate: (draft: FilesState, path: string) => void
   /** Close a tab, showing its right neighbour, else its left, else nothing. */
   closeFile: (draft: FilesState, path: string) => void
+  /** Close every tab but this one, which stays open and becomes the shown tab. */
+  closeOthers: (draft: FilesState, path: string) => void
+  /** Close every open tab. */
+  closeAll: (draft: FilesState) => void
   /** Mark one tab as being read. */
   reading: (draft: FilesState, path: string) => void
   /** Record one tab's contents. */
@@ -264,6 +268,28 @@ function retain(d: FilesState, path: string): void {
 }
 
 /**
+ * Drop one tab and everything the store held for it, leaving which tab is shown
+ * alone.
+ *
+ * Closing one tab and closing a strip full of them differ only in who takes the
+ * shown slot afterwards, so the teardown is written once and each caller decides
+ * that for itself.
+ * @param d - draft state.
+ * @param path - the tab to forget.
+ * @returns the index the tab held in the strip, or `-1` when it was not open.
+ */
+function forget(d: FilesState, path: string): number {
+  const at = d.open.indexOf(path)
+  if (at < 0) return -1
+  d.open.splice(at, 1)
+  delete d.previews[path]
+  delete d.modes[path]
+  delete d.wraps[path]
+  d.retained = d.retained.filter(candidate => candidate !== path)
+  return at
+}
+
+/**
  * Declare the explorer's store.
  *
  * A factory rather than a shared handle: the registration declares it as an
@@ -315,17 +341,24 @@ export function createFilesStore(): EngineStoreHandle<FilesState, FilesActions> 
         retain(d, path)
       },
       closeFile: (d, path) => {
-        const at = d.open.indexOf(path)
-        if (at < 0) return
-        d.open.splice(at, 1)
-        delete d.previews[path]
-        delete d.modes[path]
-        delete d.wraps[path]
-        d.retained = d.retained.filter(candidate => candidate !== path)
-        if (d.active !== path) return
+        const at = forget(d, path)
+        if (at < 0 || d.active !== path) return
         // The neighbour that takes over: the tab that slid into this slot, else
         // the one before it, matching how editors close.
         d.active = d.open[at] ?? d.open[at - 1] ?? null
+      },
+      closeOthers: (d, path) => {
+        // The tab the menu was opened on is the one that stays; asking to keep a
+        // tab that is not open would close the whole strip instead.
+        if (!d.open.includes(path)) return
+        for (const candidate of [...d.open]) {
+          if (candidate !== path) forget(d, candidate)
+        }
+        d.active = path
+      },
+      closeAll: (d) => {
+        for (const candidate of [...d.open]) forget(d, candidate)
+        d.active = null
       },
       reading: (d, path) => {
         if (!d.open.includes(path)) return

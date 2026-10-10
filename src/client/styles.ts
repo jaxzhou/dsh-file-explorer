@@ -370,6 +370,12 @@ const CSS = `
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+/* The tab menu's anchor is a placeholder: the menu is positioned from the
+   pointer that opened it, so this contributes nothing to the strip's layout. */
+.dsh-fe-tabmenu {
+  display: contents;
+}
+
 .dsh-fe-tab[data-active] {
   background: var(--dsw-alias-interactive-bg-active);
 }
